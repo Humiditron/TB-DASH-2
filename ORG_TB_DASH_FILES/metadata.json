@@ -1,6 +1,0 @@
-{
-  "name": "HUMID1 OS Humidor Dashboard",
-  "description": "Real-time humidor climate telemetry, multi-device news ticker, Recharts dual-axis historical tracking, device claiming, and ThingsBoard IoT controls.",
-  "requestFramePermissions": ["notifications"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

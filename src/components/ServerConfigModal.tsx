@@ -140,7 +140,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               )}
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              JWT Bearer tokens are automatically passed via <code className="text-amber-300 font-mono">X-Authorization</code> headers using the <code className="text-amber-300 font-mono">/src_lib/client</code> OpenAPI client for device claiming and telemetry.
+              JWT Bearer tokens are automatically passed via <code className="text-amber-300 font-mono">X-Authorization</code> headers using the <code className="text-amber-300 font-mono">/src/client</code> OpenAPI client for device claiming and telemetry.
             </p>
             {currentUser && (
               <div className="pt-1 text-[11px] text-slate-500 font-mono flex items-center justify-between border-t border-slate-900">

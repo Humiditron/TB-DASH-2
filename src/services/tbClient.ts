@@ -1,4 +1,4 @@
-import { client } from '../../src_lib/client/services.gen';
+import { client } from '../client/services.gen';
 import {
   login as apiLogin,
   logout as apiLogout,
@@ -15,11 +15,11 @@ import {
   getAllAlarmsV2 as apiGetAllAlarmsV2,
   ackAlarm as apiAckAlarm,
   clearAlarm as apiClearAlarm,
-} from '../../src_lib/client/services.gen';
+} from '../client/services.gen';
 import type {
   User,
   ClaimDeviceData,
-} from '../../src_lib/client/types.gen';
+} from '../client/types.gen';
 import {
   AuthentikUser,
   ClaimLogEntry,
