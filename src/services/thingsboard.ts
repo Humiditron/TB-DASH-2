@@ -17,7 +17,7 @@ import {
   getUser as apiGetUser,
   login as apiLogin,
   logout as apiLogout,
-} from '../client';
+} from '../client/services.gen';
 import {
   HumidorDevice,
   HumidorAlarm,
