@@ -12,6 +12,7 @@ import { AlarmsFeed } from './components/AlarmsFeed';
 import { ClaimDeviceModal } from './components/ClaimDeviceModal';
 import { ServerConfigModal } from './components/ServerConfigModal';
 import { AuthModal } from './components/AuthModal';
+import { ApiInspectorModal } from './components/ApiInspectorModal';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
 import { Flame, Cpu } from 'lucide-react';
@@ -25,6 +26,7 @@ export default function App() {
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isApiInspectorOpen, setIsApiInspectorOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
@@ -95,6 +97,7 @@ export default function App() {
           onOpenConfigModal={() => setIsConfigModalOpen(true)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onOpenClaimModal={() => setIsClaimModalOpen(true)}
+          onOpenApiInspector={() => setIsApiInspectorOpen(true)}
           onOpenAlarmsModal={() => {
             const el = document.getElementById('alarms-feed-section');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -189,6 +192,7 @@ export default function App() {
         />
         <ServerConfigModal isOpen={isConfigModalOpen} onClose={() => setIsConfigModalOpen(false)} />
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+        <ApiInspectorModal isOpen={isApiInspectorOpen} onClose={() => setIsApiInspectorOpen(false)} />
       </div>
     </ProtectedRoute>
   );

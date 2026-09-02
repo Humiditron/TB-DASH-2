@@ -135,6 +135,18 @@ export interface ClaimLogEntry {
   responsePayload?: unknown;
 }
 
+export interface ApiTransaction {
+  id: string;
+  timestamp: number;
+  method: string;
+  url: string;
+  requestPayload?: any;
+  responseStatus?: number;
+  responsePayload?: any;
+  durationMs?: number;
+  error?: string;
+}
+
 export type TempUnit = 'F' | 'C';
 export type TimeRange = '12h' | '24h' | '3d' | '7d';
 export type ActiveTab = 'overview' | 'claim' | 'devices' | 'diagnostics';

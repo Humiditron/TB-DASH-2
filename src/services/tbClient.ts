@@ -38,6 +38,7 @@ import {
   getCurrentReturnUrl,
 } from '../config/env';
 import { notificationService } from './notificationService';
+import { apiLogger } from './apiLogger';
 
 const STORAGE_KEY_TOKEN = 'humid1_tb_jwt_token';
 const STORAGE_KEY_REFRESH = 'humid1_tb_jwt_refresh';
@@ -92,16 +93,47 @@ export class ThingsBoardClientService {
       },
     });
 
-    // Request interceptor to attach JWT Token
+    // Request interceptor to attach JWT Token & log transaction
     client.interceptors.request.use((request) => {
       if (this.token) {
         request.headers.set('X-Authorization', `Bearer ${this.token}`);
       }
+      const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
+      (request as any).__txId = txId;
+
+      let parsedBody: any = undefined;
+      if (request.body) {
+        try {
+          parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
+        } catch {
+          parsedBody = request.body;
+        }
+      }
+
+      apiLogger.logRequest(txId, request.method || 'GET', request.url || '', parsedBody);
       return request;
     });
 
-    // Response interceptor for automatic silent token refresh
+    // Response interceptor for automatic silent token refresh & log response
     client.interceptors.response.use(async (response) => {
+      const txId = (response as any).request?.__txId || (response as any).__txId;
+      let responseBody: any = undefined;
+      try {
+        const clone = response.clone();
+        const text = await clone.text();
+        try {
+          responseBody = JSON.parse(text);
+        } catch {
+          responseBody = text;
+        }
+      } catch {
+        responseBody = response.body;
+      }
+
+      if (txId) {
+        apiLogger.logResponse(txId, response.status, responseBody);
+      }
+
       if (response.status === 401 && this.refreshToken) {
         await this.trySilentTokenRefresh();
       }

@@ -13,7 +13,8 @@ import {
   ShieldCheck, 
   User, 
   LogIn, 
-  LogOut 
+  LogOut,
+  Terminal
 } from 'lucide-react';
 
 interface HeaderTickerProps {
@@ -26,6 +27,7 @@ interface HeaderTickerProps {
   onOpenConfigModal: () => void;
   onOpenAlarmsModal: () => void;
   onOpenAuthModal: () => void;
+  onOpenApiInspector: () => void;
   activeAlarmCount: number;
   currentUser: UserProfile | null;
   isDemoMode: boolean;
@@ -41,6 +43,7 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
   onOpenConfigModal,
   onOpenAlarmsModal,
   onOpenAuthModal,
+  onOpenApiInspector,
   activeAlarmCount,
   currentUser,
   isDemoMode,
@@ -235,6 +238,16 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
                 <span>Sign In (SSO)</span>
               </>
             )}
+          </button>
+
+          {/* API Transaction Inspector */}
+          <button
+            onClick={onOpenApiInspector}
+            className="p-2 rounded-lg bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1.5 px-2.5 text-xs font-mono"
+            title="Inspect API Transactions, Endpoints & JSON Payloads"
+          >
+            <Terminal className="w-4 h-4" />
+            <span className="hidden md:inline">API Logs</span>
           </button>
 
           {/* Settings / Connection Config */}
