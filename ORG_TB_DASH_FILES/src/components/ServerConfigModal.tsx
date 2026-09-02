@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { thingsboard } from '../services/thingsboard';
-import { Settings, X, Server, CheckCircle2, ShieldCheck, Zap } from 'lucide-react';
+import { Settings, X, Server, CheckCircle2, Zap, Key } from 'lucide-react';
 
 interface ServerConfigModalProps {
   isOpen: boolean;
@@ -14,6 +14,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const currentConfig = thingsboard.getConfig();
   const [serverUrl, setServerUrl] = useState(currentConfig.serverUrl);
   const [authentikUrl, setAuthentikUrl] = useState(currentConfig.authentikUrl || '');
+  const [thingsboardToken, setThingsboardToken] = useState(currentConfig.thingsboardToken || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const activeToken = thingsboard.getEffectiveToken();
   const currentUser = thingsboard.getCurrentUser();
@@ -25,6 +26,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     thingsboard.saveConfig({
       serverUrl: serverUrl.trim(),
       authentikUrl: authentikUrl.trim(),
+      thingsboardToken: thingsboardToken.trim(),
     });
     setSavedSuccess(true);
     setTimeout(() => {
@@ -71,12 +73,31 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
                 placeholder="https://app.humid1.com"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pl-10 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pl-10 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
               />
               <Server className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
             </div>
             <span className="text-[11px] text-slate-500 mt-1 block">
               ThingsBoard IoT engine REST & WebSocket endpoint.
+            </span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+              ThingsBoard API Access Token (Optional JWT Override)
+            </label>
+            <div className="relative">
+              <input
+                type="password"
+                value={thingsboardToken}
+                onChange={(e) => setThingsboardToken(e.target.value)}
+                placeholder="Paste ThingsBoard JWT token if overriding SSO session"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pl-10 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
+              />
+              <Key className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            </div>
+            <span className="text-[11px] text-slate-500 mt-1 block">
+              Leave blank to auto-use your active Authentik SSO token.
             </span>
           </div>
 
@@ -90,7 +111,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 value={authentikUrl}
                 onChange={(e) => setAuthentikUrl(e.target.value)}
                 placeholder="https://auth.humid1.com"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pl-10 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pl-10 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-xs"
               />
               <Server className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
             </div>
@@ -109,7 +130,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               {activeToken ? (
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  Auto-Synced (Active)
+                  Active & Synced
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-500/30">
@@ -119,7 +140,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               )}
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              JWT Bearer tokens are automatically extracted from your Authentik SSO session and forwarded via <code className="text-amber-300 font-mono">X-Authorization</code> headers for all device claims and telemetry streams.
+              JWT Bearer tokens are automatically passed via <code className="text-amber-300 font-mono">X-Authorization</code> headers using the <code className="text-amber-300 font-mono">/src_lib/client</code> OpenAPI client for device claiming and telemetry.
             </p>
             {currentUser && (
               <div className="pt-1 text-[11px] text-slate-500 font-mono flex items-center justify-between border-t border-slate-900">
