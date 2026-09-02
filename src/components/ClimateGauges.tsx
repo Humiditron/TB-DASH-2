@@ -1,245 +1,326 @@
 import React from 'react';
 import { HumidorDevice, TempUnit } from '../types';
-import { Droplets, Thermometer, BatteryCharging, AlertOctagon, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { 
+  Droplets, 
+  Thermometer, 
+  Battery, 
+  Wifi, 
+  TrendingUp, 
+  TrendingDown, 
+  Minus,
+  Sparkles,
+  AlertTriangle
+} from 'lucide-react';
 
 interface ClimateGaugesProps {
   device: HumidorDevice;
   tempUnit: TempUnit;
+  onToggleTempUnit?: () => void;
 }
 
-export const ClimateGauges: React.FC<ClimateGaugesProps> = ({ device, tempUnit }) => {
-  const { telemetry } = device;
+export const ClimateGauges: React.FC<ClimateGaugesProps> = ({
+  device,
+  tempUnit,
+  onToggleTempUnit,
+}) => {
+  const { rh, temp, battery, rssi } = device.telemetry;
 
-  // Temperature calculations
-  const tempF = telemetry.temp;
-  const tempC = ((tempF - 32) * 5) / 9;
-  const displayTemp = tempUnit === 'C' ? `${tempC.toFixed(1)}°C` : `${tempF.toFixed(1)}°F`;
-  const isTempHazard = tempF > 75.0; // Tobacco beetle risk ceiling
+  // Relative Humidity Quality Evaluation
+  const getRhStatus = (val: number) => {
+    if (val < 62) {
+      return {
+        label: 'CRITICALLY DRY',
+        color: 'text-blue-400',
+        bg: 'bg-blue-950/40',
+        border: 'border-blue-500/30',
+        barColor: 'bg-blue-500',
+        desc: 'Wrap cigars immediately or re-season humidor.',
+      };
+    }
+    if (val < 65) {
+      return {
+        label: 'DRY ZONE',
+        color: 'text-sky-300',
+        bg: 'bg-sky-950/40',
+        border: 'border-sky-500/30',
+        barColor: 'bg-sky-400',
+        desc: 'Below optimal 68–72% Cuban / Maduro sweet spot.',
+      };
+    }
+    if (val <= 73) {
+      return {
+        label: 'PERFECT SWEET SPOT',
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-950/40',
+        border: 'border-emerald-500/30',
+        barColor: 'bg-emerald-500',
+        desc: 'Optimal cell aging & oil preservation condition.',
+      };
+    }
+    if (val <= 76) {
+      return {
+        label: 'HUMID ZONE',
+        color: 'text-amber-400',
+        bg: 'bg-amber-950/40',
+        border: 'border-amber-500/30',
+        barColor: 'bg-amber-400',
+        desc: 'Approaching upper threshold. Watch for mold risk.',
+      };
+    }
+    return {
+      label: 'MOLD HAZARD',
+      color: 'text-rose-400',
+      bg: 'bg-rose-950/40',
+      border: 'border-rose-500/30',
+      barColor: 'bg-rose-500',
+      desc: 'High mold & tobacco beetle hatching danger.',
+    };
+  };
 
-  // Humidity calculations
-  const rh = telemetry.rh;
-  const isRhIdeal = rh >= 65.0 && rh <= 75.0;
-  const isRhDry = rh < 65.0;
-  const isRhHigh = rh > 75.0;
+  // Temperature Evaluation
+  const getTempStatus = (tempF: number) => {
+    if (tempF > 74) {
+      return {
+        label: 'BEETLE RISK (>74°F)',
+        color: 'text-rose-400',
+        bg: 'bg-rose-950/40',
+        border: 'border-rose-500/30',
+        barColor: 'bg-rose-500',
+      };
+    }
+    if (tempF < 64) {
+      return {
+        label: 'SLOW AGING (<64°F)',
+        color: 'text-blue-300',
+        bg: 'bg-blue-950/40',
+        border: 'border-blue-500/30',
+        barColor: 'bg-blue-400',
+      };
+    }
+    return {
+      label: 'OPTIMAL (65–72°F)',
+      color: 'text-emerald-400',
+      bg: 'bg-emerald-950/40',
+      border: 'border-emerald-500/30',
+      barColor: 'bg-emerald-500',
+    };
+  };
 
-  // Gauge bar fill percent for RH (mapping 50% - 85% to 0 - 100%)
-  const rhFillPercent = Math.max(0, Math.min(100, ((rh - 50) / 35) * 100));
+  const rhStatus = getRhStatus(rh);
+  const tempStatus = getTempStatus(temp);
 
-  // Battery calculations
-  const battery = telemetry.battery;
-  const isBatteryLow = battery < 20;
+  const displayTemp = tempUnit === 'C' ? (((temp - 32) * 5) / 9).toFixed(1) : temp.toFixed(1);
+  const tempUnitSymbol = tempUnit === 'C' ? '°C' : '°F';
+
+  // Battery percentage color
+  const getBatteryColor = (lvl: number) => {
+    if (lvl > 50) return 'text-emerald-400';
+    if (lvl > 20) return 'text-amber-400';
+    return 'text-rose-400';
+  };
 
   return (
-    <div id="humid1-climate-gauges" className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      {/* 1. Relative Humidity Card */}
-      <div
-        id="gauge-card-rh"
-        className={`rounded-2xl border p-5 transition-all shadow-sm ${
-          isRhIdeal
-            ? 'bg-slate-900/90 border-emerald-500/30'
-            : isRhDry
-            ? 'bg-slate-900/90 border-sky-500/40'
-            : 'bg-slate-900/90 border-rose-500/50'
-        }`}
-      >
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+      {/* 1. Relative Humidity Gauge Card */}
+      <div className={`bg-slate-900/90 border ${rhStatus.border} rounded-2xl p-5 shadow-xl relative overflow-hidden transition-all backdrop-blur-sm`}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <div
-              className={`p-2 rounded-xl ${
-                isRhIdeal
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : isRhDry
-                  ? 'bg-sky-500/10 text-sky-400'
-                  : 'bg-rose-500/10 text-rose-400'
-              }`}
-            >
+            <div className={`p-2 rounded-xl ${rhStatus.bg} ${rhStatus.color}`}>
               <Droplets className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Relative Humidity</h3>
-              <p className="text-[11px] text-slate-400">Target Range: 65.0% - 75.0%</p>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Relative Humidity</span>
+              <span className={`block text-[11px] font-bold ${rhStatus.color}`}>{rhStatus.label}</span>
             </div>
           </div>
-
-          <span
-            className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${
-              isRhIdeal
-                ? 'bg-emerald-950/80 border-emerald-700/60 text-emerald-300'
-                : isRhDry
-                ? 'bg-sky-950/80 border-sky-700/60 text-sky-300'
-                : 'bg-rose-950/80 border-rose-700/60 text-rose-300 animate-pulse'
-            }`}
-          >
-            {isRhIdeal ? 'Ideal Vault Range' : isRhDry ? 'Dry — Seasoning Needed' : 'Mold Hazard'}
+          <span className="text-[11px] font-mono text-slate-500 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+            SHT40
           </span>
         </div>
 
-        {/* Big Value Display */}
-        <div className="flex items-baseline gap-2 mb-4">
-          <span
-            className={`text-4xl lg:text-5xl font-black font-mono tracking-tight ${
-              isRhIdeal ? 'text-emerald-400' : isRhDry ? 'text-sky-400' : 'text-rose-400'
-            }`}
-          >
-            {rh.toFixed(1)}
-          </span>
-          <span className="text-xl font-bold text-slate-400">% RH</span>
+        <div className="my-3 flex items-baseline justify-between">
+          <div className="flex items-baseline gap-1">
+            <span className="text-4xl font-extrabold font-display tracking-tight text-white">
+              {rh.toFixed(1)}
+            </span>
+            <span className="text-2xl font-bold text-slate-400 font-display">%</span>
+          </div>
+          <div className="text-right text-xs font-mono text-slate-400">
+            <span>Target: 69.0%</span>
+          </div>
         </div>
 
-        {/* Comfort Zone Visual Slider */}
-        <div className="space-y-1.5">
-          <div className="relative w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
-            {/* 65% - 75% Target Zone Marker (maps to ~42.8% to 71.4% of 50-85 range) */}
+        {/* Progress Bar (0 to 100 with optimal zone indicator) */}
+        <div className="space-y-1 mt-4">
+          <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden relative border border-slate-800">
+            {/* Optimal window highlight (65% to 73%) */}
+            <div className="absolute left-[65%] right-[27%] top-0 bottom-0 bg-emerald-500/20 z-0" />
             <div
-              className="absolute h-full bg-emerald-500/25 border-x border-emerald-400/50"
-              style={{ left: '42.8%', width: '28.6%' }}
-              title="Safe Zone: 65% - 75%"
-            />
-            {/* Current Value Needle / Bar */}
-            <div
-              className={`h-full transition-all duration-700 rounded-full ${
-                isRhIdeal ? 'bg-emerald-400' : isRhDry ? 'bg-sky-400' : 'bg-rose-500'
-              }`}
-              style={{ width: `${rhFillPercent}%` }}
+              className={`h-full ${rhStatus.barColor} transition-all duration-500 rounded-full`}
+              style={{ width: `${Math.min(Math.max(rh, 0), 100)}%` }}
             />
           </div>
-          <div className="flex justify-between text-[10px] font-mono text-slate-400">
-            <span>50% Dry</span>
-            <span className="text-emerald-400 font-bold">65%–75% Ideal</span>
-            <span>85% Wet</span>
+          <div className="flex justify-between text-[10px] font-mono text-slate-500">
+            <span>50%</span>
+            <span className="text-emerald-400">Ideal Zone (68-72%)</span>
+            <span>90%</span>
           </div>
         </div>
+
+        <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
+          {rhStatus.desc}
+        </p>
       </div>
 
-      {/* 2. Temperature Card */}
-      <div
-        id="gauge-card-temp"
-        className={`rounded-2xl border p-5 transition-all shadow-sm ${
-          isTempHazard
-            ? 'bg-slate-900/90 border-amber-500/50'
-            : 'bg-slate-900/90 border-slate-800'
-        }`}
-      >
+      {/* 2. Temperature Gauge Card */}
+      <div className={`bg-slate-900/90 border ${tempStatus.border} rounded-2xl p-5 shadow-xl relative overflow-hidden transition-all backdrop-blur-sm`}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <div
-              className={`p-2 rounded-xl ${
-                isTempHazard ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-200'
-              }`}
-            >
+            <div className={`p-2 rounded-xl ${tempStatus.bg} ${tempStatus.color}`}>
               <Thermometer className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Ambient Temperature</h3>
-              <p className="text-[11px] text-slate-400">Beetle Ceiling: 75.0°F (23.9°C)</p>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Temperature</span>
+              <span className={`block text-[11px] font-bold ${tempStatus.color}`}>{tempStatus.label}</span>
             </div>
           </div>
-
-          <span
-            className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${
-              isTempHazard
-                ? 'bg-amber-950/80 border-amber-700/60 text-amber-300 animate-pulse'
-                : 'bg-slate-800 border-slate-700 text-slate-300'
-            }`}
-          >
-            {isTempHazard ? 'Warning: > 75°F' : 'Normal Range'}
-          </span>
-        </div>
-
-        {/* Big Value Display */}
-        <div className="flex items-baseline gap-2 mb-4">
-          <span
-            className={`text-4xl lg:text-5xl font-black font-mono tracking-tight ${
-              isTempHazard ? 'text-amber-400' : 'text-slate-100'
-            }`}
-          >
-            {tempUnit === 'C' ? tempC.toFixed(1) : tempF.toFixed(1)}
-          </span>
-          <span className="text-xl font-bold text-slate-400">°{tempUnit}</span>
-        </div>
-
-        {/* Temperature Alert Banner or Safe Indicator */}
-        <div className="pt-1">
-          {isTempHazard ? (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-950/50 border border-amber-800/60 text-amber-300 text-xs font-medium">
-              <AlertOctagon className="w-4 h-4 shrink-0" />
-              <span>Tobacco beetle hatching risk elevated above 75.0°F. Cool humidor.</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800/80 text-slate-300 text-xs font-medium">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Optimal aging temperature maintained.</span>
-            </div>
+          {onToggleTempUnit && (
+            <button
+              onClick={onToggleTempUnit}
+              className="text-[11px] font-mono text-slate-300 hover:text-amber-400 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800 transition-colors cursor-pointer"
+            >
+              Scale: {tempUnit}
+            </button>
           )}
         </div>
-      </div>
 
-      {/* 3. Battery & Power State */}
-      <div
-        id="gauge-card-battery"
-        className={`rounded-2xl border p-5 transition-all shadow-sm ${
-          isBatteryLow
-            ? 'bg-slate-900/90 border-rose-500/50'
-            : 'bg-slate-900/90 border-slate-800'
-        }`}
-      >
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <div
-              className={`p-2 rounded-xl ${
-                isBatteryLow ? 'bg-rose-500/10 text-rose-400' : 'bg-slate-800 text-emerald-400'
-              }`}
-            >
-              <BatteryCharging className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Battery Power</h3>
-              <p className="text-[11px] text-slate-400">RTC Deep Sleep Cycle</p>
-            </div>
+        <div className="my-3 flex items-baseline justify-between">
+          <div className="flex items-baseline gap-1">
+            <span className="text-4xl font-extrabold font-display tracking-tight text-white">
+              {displayTemp}
+            </span>
+            <span className="text-2xl font-bold text-slate-400 font-display">{tempUnitSymbol}</span>
           </div>
-
-          <span
-            className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${
-              isBatteryLow
-                ? 'bg-rose-950/80 border-rose-700/60 text-rose-300 animate-bounce'
-                : 'bg-emerald-950/80 border-emerald-700/60 text-emerald-300'
-            }`}
-          >
-            {isBatteryLow ? 'Low Power (<20%)' : 'Healthy'}
-          </span>
+          <div className="text-right text-xs font-mono text-slate-400">
+            <span>Threshold: {tempUnit === 'C' ? '23.3°C' : '74.0°F'}</span>
+          </div>
         </div>
 
-        {/* Big Value Display */}
-        <div className="flex items-baseline gap-2 mb-4">
-          <span
-            className={`text-4xl lg:text-5xl font-black font-mono tracking-tight ${
-              isBatteryLow ? 'text-rose-400' : 'text-slate-100'
-            }`}
-          >
-            {battery}
-          </span>
-          <span className="text-xl font-bold text-slate-400">%</span>
-        </div>
-
-        {/* Battery Progress Bar */}
-        <div className="space-y-1.5">
-          <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+        {/* Progress Bar (50F to 90F approx) */}
+        <div className="space-y-1 mt-4">
+          <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden relative border border-slate-800">
             <div
-              className={`h-full transition-all duration-500 rounded-full ${
-                isBatteryLow
-                  ? 'bg-rose-500 animate-pulse'
-                  : battery < 50
-                  ? 'bg-amber-400'
-                  : 'bg-emerald-400'
-              }`}
-              style={{ width: `${battery}%` }}
+              className={`h-full ${tempStatus.barColor} transition-all duration-500 rounded-full`}
+              style={{ width: `${Math.min(Math.max(((temp - 50) / 40) * 100, 0), 100)}%` }}
             />
           </div>
-          <div className="flex justify-between text-[10px] font-mono text-slate-400">
-            <span>Sleep: {device.sharedAttributes.sleep_interval_sec}s</span>
-            <span>Est. {Math.round((battery / 100) * 180)} days left</span>
+          <div className="flex justify-between text-[10px] font-mono text-slate-500">
+            <span>50°F / 10°C</span>
+            <span className="text-emerald-400">Aging Range</span>
+            <span>90°F / 32°C</span>
           </div>
         </div>
+
+        <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
+          Keep below 74°F / 23.3°C to safeguard against tobacco beetle hatching.
+        </p>
+      </div>
+
+      {/* 3. Battery & Power Cell Card */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-slate-800 text-amber-400 border border-slate-700">
+              <Battery className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Power Cell</span>
+              <span className={`block text-[11px] font-bold ${getBatteryColor(battery)}`}>
+                {battery > 20 ? 'LiPo Normal' : 'Low Battery Warning'}
+              </span>
+            </div>
+          </div>
+          <span className="text-[11px] font-mono text-slate-500 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+            3.7V LiPo
+          </span>
+        </div>
+
+        <div className="my-3 flex items-baseline justify-between">
+          <div className="flex items-baseline gap-1">
+            <span className={`text-4xl font-extrabold font-display tracking-tight ${getBatteryColor(battery)}`}>
+              {battery}
+            </span>
+            <span className="text-2xl font-bold text-slate-400 font-display">%</span>
+          </div>
+          <div className="text-right text-xs font-mono text-slate-400">
+            <span>Est. ~{Math.round((battery / 100) * 180)} Days</span>
+          </div>
+        </div>
+
+        <div className="space-y-1 mt-4">
+          <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+            <div
+              className={`h-full ${battery > 50 ? 'bg-emerald-500' : battery > 20 ? 'bg-amber-500' : 'bg-rose-500'} transition-all duration-500 rounded-full`}
+              style={{ width: `${Math.min(Math.max(battery, 0), 100)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[10px] font-mono text-slate-500">
+            <span>0%</span>
+            <span>Sleep Mode Configured</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
+          Deep-sleep cycle: {device.sharedAttributes.sleep_interval_min} min telemetry intervals.
+        </p>
+      </div>
+
+      {/* 4. RF Signal & Telemetry Link Card */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-slate-800 text-sky-400 border border-slate-700">
+              <Wifi className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Wireless Link</span>
+              <span className="block text-[11px] font-bold text-sky-400">2.4GHz 802.11b/g/n</span>
+            </div>
+          </div>
+          <span className="text-[11px] font-mono text-slate-500 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+            ESP32-S3
+          </span>
+        </div>
+
+        <div className="my-3 flex items-baseline justify-between">
+          <div className="flex items-baseline gap-1">
+            <span className="text-4xl font-extrabold font-display tracking-tight text-white">
+              {rssi}
+            </span>
+            <span className="text-xl font-bold text-slate-400 font-display">dBm</span>
+          </div>
+          <div className="text-right text-xs font-mono text-slate-400">
+            <span className="truncate block max-w-[90px]">{device.clientAttributes.ssid}</span>
+          </div>
+        </div>
+
+        <div className="space-y-1 mt-4">
+          <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+            <div
+              className="h-full bg-sky-500 transition-all duration-500 rounded-full"
+              style={{ width: `${Math.min(Math.max(((rssi + 100) / 70) * 100, 5), 100)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[10px] font-mono text-slate-500">
+            <span>-100 dBm (Poor)</span>
+            <span>-30 dBm (Max)</span>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
+          ThingsBoard MQTT/REST gateway synchronization active.
+        </p>
       </div>
     </div>
   );

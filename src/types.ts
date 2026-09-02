@@ -1,12 +1,19 @@
 export type DeviceStatus = 'ONLINE' | 'SLEEP' | 'OFFLINE';
+export type DeviceTheme = 'DARK' | 'LIGHT' | 'STEALTH';
+export type OtaState = 'IDLE' | 'QUEUED' | 'DOWNLOADING' | 'VERIFIED' | 'UPDATING' | 'SUCCESS' | 'FAILED';
+export type FwState = OtaState;
+export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'WARNING';
+export type AlarmStatus = 'ACTIVE_UNACK' | 'ACTIVE_ACK' | 'CLEARED_UNACK' | 'CLEARED_ACK';
 
-export interface DeviceTelemetry {
-  rh: number; // % relative humidity (65-75% ideal)
-  temp: number; // °F ambient temperature (<= 75°F ideal)
-  battery: number; // % (warning < 20%)
-  rssi: number; // dBm (e.g. -54 dBm)
-  timestamp: number; // epoch ms
+export interface TelemetryData {
+  rh: number;            // Relative Humidity in % (ideal 65% - 75%)
+  temp: number;          // Temperature in °F (alert ceiling > 75°F)
+  battery: number;       // Battery percentage 0-100% (alert < 20%)
+  rssi: number;          // Signal strength in dBm (-30 to -90)
+  timestamp: number;     // Epoch millisecond timestamp
 }
+
+export type DeviceTelemetry = TelemetryData;
 
 export interface ClientAttributes {
   fw_version: string;
@@ -19,25 +26,53 @@ export interface ClientAttributes {
 }
 
 export interface SharedAttributes {
-  sleep_interval_sec: number; // 60s - 3600s
-  device_theme: 'DARK' | 'LIGHT' | 'STEALTH';
-  sound_enabled: boolean; // Locked if !has_sd_card || !audio_synced
+  sleep_interval_sec: number; // 60s to 3600s
+  sleep_interval_min?: number;
+  device_theme: DeviceTheme | string;
+  theme_idx?: number;
+  sound_enabled: boolean;     // Locked if has_sd_card === false || audio_synced === false
+  audio_lockout?: boolean;
   auto_update_enabled: boolean;
   manual_ota_trigger: boolean;
 }
 
-export type FwState = 'IDLE' | 'DOWNLOADING' | 'VERIFIED' | 'UPDATING' | 'SUCCESS' | 'FAILED';
+export interface HistoricalTelemetryPoint {
+  timestamp: number;
+  timeLabel?: string;
+  timeFormatted?: string;
+  dateFormatted?: string;
+  rh: number;
+  temp: number;
+  tempC?: number;
+  battery?: number;
+  rssi?: number;
+}
+
+export type TimeSeriesPoint = HistoricalTelemetryPoint;
 
 export interface OTAState {
-  fw_state: FwState;
-  fw_progress: number; // 0 - 100
+  fw_state: OtaState;
+  fw_progress: number;
   target_version: string;
   last_updated?: number;
   message?: string;
 }
 
-export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'WARNING';
-export type AlarmStatus = 'ACTIVE_UNACK' | 'ACTIVE_ACK' | 'CLEARED_UNACK' | 'CLEARED_ACK';
+export interface HumidorDevice {
+  id: string;
+  name: string;
+  status: DeviceStatus;
+  lastActivityTime?: number;
+  lastSeen?: number;
+  telemetry: TelemetryData;
+  clientAttributes: ClientAttributes;
+  sharedAttributes: SharedAttributes;
+  fw_state?: OtaState;
+  fw_progress?: number; // 0 to 100
+  latestFwAvailable?: string;
+  ota?: OTAState;
+  history?: HistoricalTelemetryPoint[];
+}
 
 export interface HumidorAlarm {
   id: string;
@@ -46,44 +81,26 @@ export interface HumidorAlarm {
   type: string;
   severity: AlarmSeverity;
   status: AlarmStatus;
-  message: string;
   createdTime: number;
+  details?: any;
+  message?: string;
   ackTime?: number;
   clearTime?: number;
-  details?: Record<string, unknown>;
-}
-
-export interface TimeSeriesPoint {
-  timestamp: number;
-  timeFormatted: string;
-  dateFormatted: string;
-  rh: number;
-  temp: number; // in °F
-  tempC: number; // in °C
-  battery: number;
-  rssi: number;
-}
-
-export interface HumidorDevice {
-  id: string;
-  name: string;
-  status: DeviceStatus;
-  lastSeen: number; // timestamp
-  telemetry: DeviceTelemetry;
-  clientAttributes: ClientAttributes;
-  sharedAttributes: SharedAttributes;
-  ota: OTAState;
-  history: TimeSeriesPoint[];
 }
 
 export interface ThingsBoardConfig {
   serverUrl: string;
   username?: string;
   password?: string;
+  thingsboardToken?: string;
   token?: string;
   refreshToken?: string;
-  isConnected: boolean;
-  isSimulated: boolean;
+  authentikUrl?: string;
+  authentikClientId?: string;
+  authentikAppSlug?: string;
+  isDemoMode?: boolean;
+  isConnected?: boolean;
+  isSimulated?: boolean;
   lastSync?: number;
 }
 

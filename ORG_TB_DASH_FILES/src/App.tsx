@@ -71,7 +71,7 @@ export default function App() {
     setSelectedDeviceId(deviceId);
   };
 
-  const handleToggleTempUnit迁移 = () => {
+  const handleToggleTempUnit = () => {
     setTempUnit((prev) => (prev === 'F' ? 'C' : 'F'));
   };
 
@@ -90,7 +90,7 @@ export default function App() {
           selectedDeviceId={selectedDeviceId || (devices[0]?.id ?? '')}
           onSelectDevice={handleSelectDevice}
           tempUnit={tempUnit}
-          onToggleTempUnit={handleToggleTempUnit迁移}
+          onToggleTempUnit={handleToggleTempUnit}
           activeAlarmCount={alarms.filter((a) => a.status.startsWith('ACTIVE')).length}
           onOpenConfigModal={() => setIsConfigModalOpen(true)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
@@ -118,7 +118,7 @@ export default function App() {
               <ClimateGauges
                 device={selectedDevice}
                 tempUnit={tempUnit}
-                onToggleTempUnit={handleToggleTempUnit迁移}
+                onToggleTempUnit={handleToggleTempUnit}
               />
 
               {/* Historical Telemetry Chart */}

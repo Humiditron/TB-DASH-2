@@ -4,6 +4,11 @@ import { getEnv } from '../utils/env';
 
 const CONFIG_STORAGE_KEY = 'humid1_thingsboard_config';
 
+export const DEFAULT_THINGSBOARD_URL = 'https://app.humid1.com';
+export const DEFAULT_AUTHENTIK_URL = 'https://auth.humid1.com';
+export const DEFAULT_APP_SLUG = 'humid1-dash';
+export const DEFAULT_CLIENT_ID = '7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI';
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -24,7 +29,6 @@ class ThingsBoardService {
   private livePollInterval: number | null = null;
 
   constructor() {
-    // Purge any stale mock device/alarm caches from previous versions
     this.purgeLegacyStorage();
     this.config = this.loadConfig();
     this.authToken = this.findAutomaticJwt();
@@ -35,7 +39,7 @@ class ThingsBoardService {
 
   /**
    * Automatically discovers the active JWT token from OIDC session storage,
-   * URL parameters, or environment variables without requiring user input.
+   * URL parameters, or environment variables.
    */
   public findAutomaticJwt(): string | null {
     if (this.authToken && this.authToken.trim()) {
@@ -88,11 +92,11 @@ class ThingsBoardService {
         // ignore
       }
 
-      // 3. Scan localStorage for any stored OIDC sessions
+      // 3. Scan localStorage for any stored OIDC sessions or tokens
       try {
         for (let i = 0; i < window.localStorage.length; i++) {
           const key = window.localStorage.key(i);
-          if (key && (key.startsWith('oidc.user:') || key.includes('authentik_token') || key.includes('tb_token'))) {
+          if (key && (key.startsWith('oidc.user:') || key.includes('authentik_token') || key.includes('tb_token') || key === 'humid1_active_jwt')) {
             const rawVal = window.localStorage.getItem(key);
             if (rawVal) {
               try {
@@ -126,8 +130,6 @@ class ThingsBoardService {
     try {
       localStorage.removeItem('humid1_devices_state');
       localStorage.removeItem('humid1_alarms_state');
-      localStorage.removeItem('humid1_auth_token');
-      localStorage.removeItem('humid1_refresh_token');
       localStorage.removeItem('humid1_demo_mode');
     } catch {
       // ignore
@@ -147,7 +149,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Called by the application when Authentik OIDC authenticates or refreshes.
+   * Called when Authentik OIDC authenticates or user signs in.
    */
   public async setAuthSession(token: string | null, profile?: any): Promise<void> {
     if (!token) {
@@ -156,6 +158,11 @@ class ThingsBoardService {
       this.devices = [];
       this.alarms = [];
       this.stopLivePolling();
+      try {
+        localStorage.removeItem('humid1_active_jwt');
+      } catch {
+        // ignore
+      }
       this.notifyAuth();
       this.notifySubscribers();
       return;
@@ -163,6 +170,11 @@ class ThingsBoardService {
 
     this.authToken = token.trim();
     this.config.isConnected = true;
+    try {
+      localStorage.setItem('humid1_active_jwt', this.authToken);
+    } catch {
+      // ignore
+    }
 
     if (profile) {
       this.setOidcProfile(profile);
@@ -184,21 +196,46 @@ class ThingsBoardService {
     };
   }
 
-  private extractProfileFromJwt(jwtToken: string) {
+  public extractProfileFromJwt(jwtToken: string) {
     try {
       const payloadBase64 = jwtToken.split('.')[1];
       if (payloadBase64) {
         const decodedJson = JSON.parse(atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/')));
         this.currentUser = {
-          id: decodedJson.sub || 'authentik_user',
+          id: decodedJson.sub || decodedJson.userId || 'authentik_user',
           email: decodedJson.email || decodedJson.preferred_username || decodedJson.sub || 'User',
-          firstName: decodedJson.name || decodedJson.given_name || '',
-          lastName: decodedJson.family_name || '',
-          authority: decodedJson.iss?.includes('auth') ? 'AUTHENTIK_SSO' : 'CUSTOMER_USER',
+          firstName: decodedJson.name || decodedJson.given_name || decodedJson.firstName || '',
+          lastName: decodedJson.family_name || decodedJson.lastName || '',
+          authority: decodedJson.iss?.includes('auth') ? 'AUTHENTIK_SSO' : (decodedJson.scopes?.[0] || 'CUSTOMER_USER'),
         };
       }
     } catch {
       // ignore
+    }
+  }
+
+  public async loginWithCredentials(username: string, pass: string): Promise<{ success: boolean; error?: string }> {
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
+    try {
+      const res = await fetch(`${serverUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: pass }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        return { success: false, error: errJson?.message || `Login failed (status ${res.status})` };
+      }
+
+      const data = await res.json();
+      if (data.token) {
+        await this.setAuthSession(data.token);
+        return { success: true };
+      }
+      return { success: false, error: 'No token returned by ThingsBoard' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to connect to ThingsBoard server' };
     }
   }
 
@@ -242,6 +279,7 @@ class ThingsBoardService {
       thingsboardToken: newConfig.thingsboardToken !== undefined ? newConfig.thingsboardToken.trim() : this.config.thingsboardToken,
       authentikUrl: newConfig.authentikUrl !== undefined ? normalizeUrl(newConfig.authentikUrl) : this.config.authentikUrl,
       authentikClientId: newConfig.authentikClientId !== undefined ? newConfig.authentikClientId.trim() : this.config.authentikClientId,
+      authentikAppSlug: newConfig.authentikAppSlug !== undefined ? newConfig.authentikAppSlug.trim() : this.config.authentikAppSlug,
     };
     try {
       localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(this.config));
@@ -261,11 +299,11 @@ class ThingsBoardService {
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
-          serverUrl: normalizeUrl(parsed.serverUrl || getEnv('VITE_THINGSBOARD_URL', '')),
+          serverUrl: normalizeUrl(parsed.serverUrl || getEnv('VITE_THINGSBOARD_URL', DEFAULT_THINGSBOARD_URL)),
           thingsboardToken: parsed.thingsboardToken || getEnv('VITE_THINGSBOARD_TOKEN', ''),
-          authentikUrl: normalizeUrl(parsed.authentikUrl || getEnv('VITE_AUTHENTIK_URL', '')),
-          authentikClientId: parsed.authentikClientId || getEnv('VITE_AUTHENTIK_CLIENT_ID', ''),
-          authentikAppSlug: parsed.authentikAppSlug || getEnv('VITE_AUTHENTIK_APP_SLUG', 'humid1-dash'),
+          authentikUrl: normalizeUrl(parsed.authentikUrl || getEnv('VITE_AUTHENTIK_URL', DEFAULT_AUTHENTIK_URL)),
+          authentikClientId: parsed.authentikClientId || getEnv('VITE_AUTHENTIK_CLIENT_ID', DEFAULT_CLIENT_ID),
+          authentikAppSlug: parsed.authentikAppSlug || getEnv('VITE_AUTHENTIK_APP_SLUG', DEFAULT_APP_SLUG),
           isDemoMode: false,
           isConnected: false,
         };
@@ -275,11 +313,11 @@ class ThingsBoardService {
     }
 
     return {
-      serverUrl: normalizeUrl(getEnv('VITE_THINGSBOARD_URL', '')),
+      serverUrl: normalizeUrl(getEnv('VITE_THINGSBOARD_URL', DEFAULT_THINGSBOARD_URL)),
       thingsboardToken: getEnv('VITE_THINGSBOARD_TOKEN', ''),
-      authentikUrl: normalizeUrl(getEnv('VITE_AUTHENTIK_URL', '')),
-      authentikClientId: getEnv('VITE_AUTHENTIK_CLIENT_ID', ''),
-      authentikAppSlug: getEnv('VITE_AUTHENTIK_APP_SLUG', 'humid1-dash'),
+      authentikUrl: normalizeUrl(getEnv('VITE_AUTHENTIK_URL', DEFAULT_AUTHENTIK_URL)),
+      authentikClientId: getEnv('VITE_AUTHENTIK_CLIENT_ID', DEFAULT_CLIENT_ID),
+      authentikAppSlug: getEnv('VITE_AUTHENTIK_APP_SLUG', DEFAULT_APP_SLUG),
       isDemoMode: false,
       isConnected: false,
     };
@@ -312,9 +350,6 @@ class ThingsBoardService {
     return headers;
   }
 
-  /**
-   * Initialize live polling against ThingsBoard
-   */
   public initRealBackend() {
     this.stopLivePolling();
     if (!this.getEffectiveToken()) return;
@@ -338,13 +373,10 @@ class ThingsBoardService {
     }
   }
 
-  /**
-   * Fetch current authenticated user profile from ThingsBoard
-   */
   public async fetchUserProfile(): Promise<UserProfile | null> {
     const token = this.getEffectiveToken();
     if (!token) return this.currentUser;
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     if (!serverUrl) return this.currentUser;
 
     try {
@@ -366,14 +398,11 @@ class ThingsBoardService {
         return this.currentUser;
       }
     } catch {
-      // Keep OIDC profile if Thingsboard /api/auth/user is behind SSO
+      // Keep OIDC profile if ThingsBoard /api/auth/user is not reachable
     }
     return this.currentUser;
   }
 
-  /**
-   * Query real devices from ThingsBoard
-   */
   public async fetchRealDevices(): Promise<HumidorDevice[]> {
     const effectiveToken = this.getEffectiveToken();
     if (!effectiveToken) {
@@ -382,7 +411,7 @@ class ThingsBoardService {
       return [];
     }
 
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     if (!serverUrl) return [];
 
     try {
@@ -527,9 +556,6 @@ class ThingsBoardService {
     }
   }
 
-  /**
-   * Fetch active and historic alarms from ThingsBoard
-   */
   public async fetchRealAlarms(): Promise<HumidorAlarm[]> {
     const token = this.getEffectiveToken();
     if (!token) {
@@ -538,7 +564,7 @@ class ThingsBoardService {
       return [];
     }
 
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     if (!serverUrl) return [];
 
     try {
@@ -568,12 +594,8 @@ class ThingsBoardService {
     return this.alarms;
   }
 
-  /**
-   * Provision / Claim Device on ThingsBoard
-   * POST /api/customer/device/{deviceName}/claim
-   */
   public async claimDevice(deviceName: string, secretKey: string): Promise<HumidorDevice> {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (!token || !serverUrl) {
       throw new Error('Not connected to ThingsBoard. Please check server settings.');
@@ -590,7 +612,6 @@ class ThingsBoardService {
     });
 
     if (!claimRes.ok && (claimRes.status === 404 || claimRes.status === 405)) {
-      // Try alternate claim endpoint format
       claimRes = await fetch(`${serverUrl}/api/customer/device/claim`, {
         method: 'POST',
         headers: this.getAuthHeaders(),
@@ -628,20 +649,17 @@ class ThingsBoardService {
       throw new Error(errMsg);
     }
 
-    // ThingsBoard returns 200 with { response: "FAILURE" | "SUCCESS" | "CLAIMED" }
     if (claimJson && claimJson.response === 'FAILURE') {
       throw new Error(
         `Claim verification failed: ThingsBoard rejected the claim for "${cleanDeviceName}". Verify that the device is running and the secret PIN matches.`
       );
     }
 
-    // Refresh devices list
     const updatedDevices = await this.fetchRealDevices();
     const matched = updatedDevices.find((d) => d.name.toLowerCase() === cleanDeviceName.toLowerCase());
     if (matched) return matched;
     if (updatedDevices.length > 0) return updatedDevices[0];
 
-    // If device was successfully claimed or response returned device object
     if (claimJson?.device) {
       const dev = claimJson.device;
       const devId = dev.id?.id || dev.id;
@@ -679,12 +697,8 @@ class ThingsBoardService {
     throw new Error('Device claimed, waiting for initial telemetry packet from ThingsBoard.');
   }
 
-  /**
-   * Unclaim / Release Device back to Tenant
-   * DELETE /api/customer/device/{deviceName}/claim
-   */
   public async unclaimDevice(deviceName: string): Promise<boolean> {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (!token || !serverUrl) {
       throw new Error('Not connected to ThingsBoard.');
@@ -712,11 +726,8 @@ class ThingsBoardService {
     return true;
   }
 
-  /**
-   * Timeseries historical query from ThingsBoard
-   */
   public async getHistory(deviceId: string, rangeHours: number = 72): Promise<HistoricalTelemetryPoint[]> {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (!token || !serverUrl) return [];
 
@@ -789,11 +800,8 @@ class ThingsBoardService {
     return [];
   }
 
-  /**
-   * Updates shared attributes on ThingsBoard
-   */
   public async updateSharedAttributes(deviceId: string, attributes: Partial<SharedAttributes>): Promise<void> {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (token && serverUrl) {
       try {
@@ -807,7 +815,6 @@ class ThingsBoardService {
       }
     }
 
-    // Update in-memory state
     this.devices = this.devices.map((dev) => {
       if (dev.id === deviceId) {
         return {
@@ -821,9 +828,6 @@ class ThingsBoardService {
     this.notifySubscribers();
   }
 
-  /**
-   * Trigger OTA update flow
-   */
   public async triggerManualOta(deviceId: string): Promise<void> {
     await this.updateSharedAttributes(deviceId, { manual_ota_trigger: true });
     this.devices = this.devices.map((d) =>
@@ -833,7 +837,7 @@ class ThingsBoardService {
   }
 
   public acknowledgeAlarm(alarmId: string) {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (token && serverUrl) {
       fetch(`${serverUrl}/api/alarm/${alarmId}/ack`, {
@@ -855,7 +859,7 @@ class ThingsBoardService {
   }
 
   public clearAlarm(alarmId: string) {
-    const serverUrl = (this.config.serverUrl || '').replace(/\/$/, '');
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/$/, '');
     const token = this.getEffectiveToken();
     if (token && serverUrl) {
       fetch(`${serverUrl}/api/alarm/${alarmId}/clear`, {
