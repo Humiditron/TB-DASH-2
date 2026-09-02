@@ -83,7 +83,7 @@ class ThingsBoardService {
     });
 
     // Register request interceptor for Bearer token injection & apiLogger
-    client.interceptors.request.use((request) => {
+    client.interceptors.request.use((request, options) => {
       const token = this.getEffectiveToken();
       if (token) {
         request.headers.set('X-Authorization', `Bearer ${token}`);
@@ -93,8 +93,8 @@ class ThingsBoardService {
       const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
       (request as any).__txId = txId;
 
-      let parsedBody: any = undefined;
-      if (request.body) {
+      let parsedBody: any = options?.body;
+      if (!parsedBody && request.body) {
         try {
           parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
         } catch {
@@ -107,8 +107,8 @@ class ThingsBoardService {
     });
 
     // Register response interceptor for apiLogger
-    client.interceptors.response.use(async (response) => {
-      const txId = (response as any).request?.__txId || (response as any).__txId;
+    client.interceptors.response.use(async (response, request) => {
+      const txId = (request as any)?.__txId;
       let responseBody: any = undefined;
       try {
         const clone = response.clone();
