@@ -32,7 +32,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsConnecting(true);
     setStatusFeedback(null);
 
-    setAuthentikSlug(authentikSlug.trim() || 'web-dash');
+    setAuthentikSlug(authentikSlug.trim() || 'humid1-dash');
 
     onSaveConfig({
       serverUrl,
@@ -111,13 +111,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 type="text"
                 value={authentikSlug}
                 onChange={(e) => setAuthentikSlugInput(e.target.value)}
-                placeholder="web-dash"
+                placeholder="humid1-dash"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
               />
               <Fingerprint className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
             </div>
             <span className="text-[11px] text-slate-400 mt-1 block">
-              Routes to <code className="text-amber-400 font-mono">{APP_CONFIG.domains.authentikUrl}/application/o/{authentikSlug || 'web-dash'}/</code> and returns to this dashboard.
+              Routes to <code className="text-amber-400 font-mono">{APP_CONFIG.domains.authentikUrl}/application/o/{authentikSlug || 'humid1-dash'}/</code> and returns to this dashboard.
             </span>
           </div>
 

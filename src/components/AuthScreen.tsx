@@ -82,7 +82,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   }, [onAuthenticated]);
 
   const handleSaveSlug = () => {
-    const trimmed = tempSlug.trim() || 'web-dash';
+    const trimmed = tempSlug.trim() || 'humid1-dash';
     saveAuthentikSlug(trimmed);
     setAuthentikSlugState(trimmed);
     setIsEditingSlug(false);
@@ -298,7 +298,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       type="text"
                       value={tempSlug}
                       onChange={(e) => setTempSlug(e.target.value)}
-                      placeholder="web-dash"
+                      placeholder="humid1-dash"
                       className="bg-slate-900 border border-amber-500/50 rounded-md px-2 py-0.5 text-[11px] text-amber-300 font-mono focus:outline-none w-28"
                     />
                     <button

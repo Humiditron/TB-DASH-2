@@ -14,7 +14,8 @@ export interface Humid1DomainMap {
 
 export interface Humid1Config {
   domains: Humid1DomainMap;
-  authentikSlug: string;  // e.g. "web-dash"
+  authentikSlug: string;  // e.g. "humid1-dash"
+  authentikClientId: string; // Authentik OAuth2 Provider Client ID
   ssoAuthorizationEndpoint: string;
   defaultDeviceName: string;
   isSimulatedDefault: boolean;
@@ -27,6 +28,7 @@ declare global {
       THINGSBOARD_SERVER_URL?: string;
       AUTHENTIK_URL?: string;
       AUTHENTIK_SLUG?: string;
+      AUTHENTIK_CLIENT_ID?: string;
       CAPTCHA_URL?: string;
       CHAT_URL?: string;
       DASHBOARD_URL?: string;
@@ -79,7 +81,12 @@ export const APP_CONFIG: Humid1Config = {
   authentikSlug: resolveEnv(
     'AUTHENTIK_SLUG',
     import.meta.env.VITE_AUTHENTIK_SLUG || '',
-    'web-dash'
+    'humid1-dash'
+  ),
+  authentikClientId: resolveEnv(
+    'AUTHENTIK_CLIENT_ID',
+    import.meta.env.VITE_AUTHENTIK_CLIENT_ID || '',
+    '7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI'
   ),
   ssoAuthorizationEndpoint: resolveEnv(
     'SSO_AUTH_ENDPOINT',
@@ -96,9 +103,17 @@ const STORAGE_KEY_AUTHENTIK_SLUG = 'humid1_authentik_slug';
 export function getAuthentikSlug(): string {
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem(STORAGE_KEY_AUTHENTIK_SLUG);
-    if (saved && saved.trim()) return saved.trim();
+    if (saved && saved.trim()) {
+      const val = saved.trim();
+      // Auto-migrate from previous test slug "web-dash"
+      if (val === 'web-dash') {
+        localStorage.setItem(STORAGE_KEY_AUTHENTIK_SLUG, 'humid1-dash');
+        return 'humid1-dash';
+      }
+      return val;
+    }
   }
-  return APP_CONFIG.authentikSlug || 'web-dash';
+  return APP_CONFIG.authentikSlug || 'humid1-dash';
 }
 
 export function setAuthentikSlug(slug: string): void {
@@ -118,7 +133,7 @@ export function getCurrentReturnUrl(): string {
 }
 
 /**
- * Generates the direct Authentik Application launch URL for the web-dash provider slug
+ * Generates the direct Authentik Application launch URL for the humid1-dash provider slug
  * with ?next parameter returning to the current dashboard.
  */
 export function getAuthentikAppLoginUrl(customSlug?: string, customReturnUrl?: string): string {
@@ -131,11 +146,11 @@ export function getAuthentikAppLoginUrl(customSlug?: string, customReturnUrl?: s
 /**
  * Generates the Authentik OIDC OAuth2 Authorize URL
  */
-export function getAuthentikOidcAuthorizeUrl(customSlug?: string, customReturnUrl?: string): string {
-  const slug = customSlug || getAuthentikSlug();
+export function getAuthentikOidcAuthorizeUrl(customClientId?: string, customReturnUrl?: string): string {
+  const clientId = customClientId || APP_CONFIG.authentikClientId || getAuthentikSlug();
   const returnUrl = customReturnUrl || getCurrentReturnUrl();
   const base = APP_CONFIG.domains.authentikUrl;
-  return `${base}/application/o/authorize/?client_id=${encodeURIComponent(slug)}&response_type=token%20id_token&redirect_uri=${encodeURIComponent(returnUrl)}&scope=openid%20profile%20email&nonce=${Date.now()}`;
+  return `${base}/application/o/authorize/?client_id=${encodeURIComponent(clientId)}&response_type=token%20id_token&redirect_uri=${encodeURIComponent(returnUrl)}&scope=openid%20profile%20email&nonce=${Date.now()}`;
 }
 
 /**
