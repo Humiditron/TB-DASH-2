@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { HumidorDevice, HumidorAlarm, TempUnit } from './types';
 import { thingsboard, UserProfile } from './services/thingsboard';
-import { tbClient } from './services/tbClient';
 import { HeaderTicker } from './components/HeaderTicker';
 import { DeviceStatusHeader } from './components/DeviceStatusHeader';
 import { ClimateGauges } from './components/ClimateGauges';
