@@ -1,0 +1,29 @@
+# 1. Main Dashboard & Landing Page (Forward to webapp container)
+humid1.com {
+    reverse_proxy webapp:80
+    encode zstd gzip
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+
+# 2. ThingsBoard IoT Engine
+app.humid1.com {
+    reverse_proxy host.docker.internal:8080 {
+        header_up Upgrade {>Upgrade}
+        header_up Connection {>Connection}
+    }
+}
+
+# 3. Authentik SSO
+auth.humid1.com {
+    reverse_proxy host.docker.internal:9000
+}
+
+# 4. Chatto Chat Interface
+chat.humid1.com {
+    reverse_proxy host.docker.internal:3001
+}
