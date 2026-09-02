@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { normalizeUrl } from '../utils/url';
 import { getEnv } from '../utils/env';
+import { apiLogger } from './apiLogger';
 
 const CONFIG_STORAGE_KEY = 'humid1_thingsboard_config';
 const CLAIM_LOGS_STORAGE_KEY = 'humid1_tb_claim_logs';
@@ -81,14 +82,50 @@ class ThingsBoardService {
       },
     });
 
-    // Register request interceptor for Bearer token injection
+    // Register request interceptor for Bearer token injection & apiLogger
     client.interceptors.request.use((request) => {
       const token = this.getEffectiveToken();
       if (token) {
         request.headers.set('X-Authorization', `Bearer ${token}`);
         request.headers.set('Authorization', `Bearer ${token}`);
       }
+
+      const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
+      (request as any).__txId = txId;
+
+      let parsedBody: any = undefined;
+      if (request.body) {
+        try {
+          parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
+        } catch {
+          parsedBody = request.body;
+        }
+      }
+
+      apiLogger.logRequest(txId, request.method || 'GET', request.url || '', parsedBody);
       return request;
+    });
+
+    // Register response interceptor for apiLogger
+    client.interceptors.response.use(async (response) => {
+      const txId = (response as any).request?.__txId || (response as any).__txId;
+      let responseBody: any = undefined;
+      try {
+        const clone = response.clone();
+        const text = await clone.text();
+        try {
+          responseBody = JSON.parse(text);
+        } catch {
+          responseBody = text;
+        }
+      } catch {
+        responseBody = response.body;
+      }
+
+      if (txId) {
+        apiLogger.logResponse(txId, response.status, responseBody);
+      }
+      return response;
     });
   }
 
