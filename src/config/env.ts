@@ -14,6 +14,7 @@ export interface Humid1DomainMap {
 
 export interface Humid1Config {
   domains: Humid1DomainMap;
+  authentikSlug: string;  // e.g. "web-dash"
   ssoAuthorizationEndpoint: string;
   defaultDeviceName: string;
   isSimulatedDefault: boolean;
@@ -25,6 +26,7 @@ declare global {
     __HUMID1_CONFIG__?: Partial<Humid1DomainMap> & {
       THINGSBOARD_SERVER_URL?: string;
       AUTHENTIK_URL?: string;
+      AUTHENTIK_SLUG?: string;
       CAPTCHA_URL?: string;
       CHAT_URL?: string;
       DASHBOARD_URL?: string;
@@ -74,6 +76,11 @@ export const APP_CONFIG: Humid1Config = {
       'https://chat.humid1.com'
     ),
   },
+  authentikSlug: resolveEnv(
+    'AUTHENTIK_SLUG',
+    import.meta.env.VITE_AUTHENTIK_SLUG || '',
+    'web-dash'
+  ),
   ssoAuthorizationEndpoint: resolveEnv(
     'SSO_AUTH_ENDPOINT',
     import.meta.env.VITE_SSO_AUTH_ENDPOINT || '',
@@ -83,3 +90,59 @@ export const APP_CONFIG: Humid1Config = {
   isSimulatedDefault: false,
   version: '1.2.0',
 };
+
+const STORAGE_KEY_AUTHENTIK_SLUG = 'humid1_authentik_slug';
+
+export function getAuthentikSlug(): string {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem(STORAGE_KEY_AUTHENTIK_SLUG);
+    if (saved && saved.trim()) return saved.trim();
+  }
+  return APP_CONFIG.authentikSlug || 'web-dash';
+}
+
+export function setAuthentikSlug(slug: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEY_AUTHENTIK_SLUG, slug.trim());
+  }
+}
+
+/**
+ * Returns the current app's origin and path for SSO redirect callback
+ */
+export function getCurrentReturnUrl(): string {
+  if (typeof window !== 'undefined') {
+    return window.location.origin + window.location.pathname;
+  }
+  return APP_CONFIG.domains.dashboardUrl;
+}
+
+/**
+ * Generates the direct Authentik Application launch URL for the web-dash provider slug
+ * with ?next parameter returning to the current dashboard.
+ */
+export function getAuthentikAppLoginUrl(customSlug?: string, customReturnUrl?: string): string {
+  const slug = customSlug || getAuthentikSlug();
+  const returnUrl = customReturnUrl || getCurrentReturnUrl();
+  const base = APP_CONFIG.domains.authentikUrl;
+  return `${base}/application/o/${encodeURIComponent(slug)}/?next=${encodeURIComponent(returnUrl)}`;
+}
+
+/**
+ * Generates the Authentik OIDC OAuth2 Authorize URL
+ */
+export function getAuthentikOidcAuthorizeUrl(customSlug?: string, customReturnUrl?: string): string {
+  const slug = customSlug || getAuthentikSlug();
+  const returnUrl = customReturnUrl || getCurrentReturnUrl();
+  const base = APP_CONFIG.domains.authentikUrl;
+  return `${base}/application/o/authorize/?client_id=${encodeURIComponent(slug)}&response_type=token%20id_token&redirect_uri=${encodeURIComponent(returnUrl)}&scope=openid%20profile%20email&nonce=${Date.now()}`;
+}
+
+/**
+ * Generates ThingsBoard OAuth2 Gateway authorization URL with return redirects attached
+ */
+export function getThingsBoardOAuth2Url(serverUrl?: string, customReturnUrl?: string): string {
+  const base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
+  const returnUrl = customReturnUrl || getCurrentReturnUrl();
+  return `${base}/oauth2/authorization/authentik?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}`;
+}

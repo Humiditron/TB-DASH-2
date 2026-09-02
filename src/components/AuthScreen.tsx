@@ -12,10 +12,21 @@ import {
   Terminal,
   MessageSquare,
   CheckCircle2,
+  Settings2,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { AuthentikUser, OAuth2ClientOption } from '../types';
 import { tbClient } from '../services/tbClient';
-import { APP_CONFIG } from '../config/env';
+import {
+  APP_CONFIG,
+  getAuthentikSlug,
+  setAuthentikSlug as saveAuthentikSlug,
+  getAuthentikAppLoginUrl,
+  getAuthentikOidcAuthorizeUrl,
+  getThingsBoardOAuth2Url,
+  getCurrentReturnUrl,
+} from '../config/env';
 import { EcosystemModal } from './EcosystemModal';
 
 interface AuthScreenProps {
@@ -33,12 +44,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [tempServerUrl, setTempServerUrl] = useState(serverUrl);
+  const [authentikSlug, setAuthentikSlugState] = useState(getAuthentikSlug());
+  const [isEditingSlug, setIsEditingSlug] = useState(false);
+  const [tempSlug, setTempSlug] = useState(getAuthentikSlug());
   const [isLoading, setIsLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Authenticating...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [oauthClients, setOauthClients] = useState<OAuth2ClientOption[]>([]);
   const [directTokenInput, setDirectTokenInput] = useState('');
   const [showDirectToken, setShowDirectToken] = useState(false);
+  const [showAdvancedSso, setShowAdvancedSso] = useState(false);
   const [isEcosystemOpen, setIsEcosystemOpen] = useState(false);
 
   useEffect(() => {
@@ -60,25 +75,34 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       });
     }
 
-    // 3. Load available SSO clients from ThingsBoard
+    // 3. Load available SSO clients
     tbClient.getAvailableOAuth2Clients().then((clients) => {
       setOauthClients(clients);
     });
   }, [onAuthenticated]);
 
+  const handleSaveSlug = () => {
+    const trimmed = tempSlug.trim() || 'web-dash';
+    saveAuthentikSlug(trimmed);
+    setAuthentikSlugState(trimmed);
+    setIsEditingSlug(false);
+    // Refresh available clients
+    tbClient.getAvailableOAuth2Clients().then((clients) => {
+      setOauthClients(clients);
+    });
+  };
+
   const handleSSORedirect = (customUrl?: string) => {
     setIsLoading(true);
-    setLoadingText('Redirecting to Authentik SSO...');
+    setLoadingText('Connecting to Authentik SSO...');
     setErrorMessage(null);
 
-    // Get authorization endpoint URL on ThingsBoard host (e.g. app.humid1.com/oauth2/authorization/...)
+    const returnUrl = getCurrentReturnUrl();
     let targetUrl = customUrl;
+
     if (!targetUrl) {
-      if (oauthClients.length > 0 && oauthClients[0].url) {
-        targetUrl = oauthClients[0].url;
-      } else {
-        targetUrl = `${serverUrl}/oauth2/authorization/authentik`;
-      }
+      // Direct Authentik Application provider (web-dash) with ?next= return url
+      targetUrl = getAuthentikAppLoginUrl(authentikSlug, returnUrl);
     }
 
     // Ensure absolute target
@@ -91,7 +115,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       window.location.href = targetUrl;
     } catch (err) {
       setIsLoading(false);
-      setErrorMessage('Failed to initiate Authentik redirect. Please verify ThingsBoard server host.');
+      setErrorMessage('Failed to initiate Authentik redirect. Please verify network connectivity.');
     }
   };
 
@@ -142,8 +166,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       const decoded = tbClient.decodeJwtPayload(directTokenInput.trim());
       const fallbackUser: AuthentikUser = {
         id: (decoded?.userId as string) || 'tb-user-from-jwt',
-        email: (decoded?.sub as string) || 'customer@humid1.com',
-        name: (decoded?.firstName as string) || 'Customer User',
+        email: (decoded?.sub as string) || (decoded?.email as string) || 'customer@humid1.com',
+        name: (decoded?.name as string) || (decoded?.firstName as string) || 'Customer User',
         authority: (decoded?.scopes as any)?.[0] || 'CUSTOMER_USER',
         customerId: (decoded?.customerId as string) || undefined,
         tenantId: (decoded?.tenantId as string) || undefined,
@@ -262,18 +286,58 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {/* 1. Authentik SSO Flow */}
         {activeMode === 'sso' && (
           <div className="space-y-4 animate-fade-in">
-            <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 space-y-2">
+            {/* Target Provider & Destination Banner */}
+            <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Target ThingsBoard Instance
+                  Authentik Provider
                 </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  {serverUrl.replace(/^https?:\/\//, '')}
-                </span>
+                {isEditingSlug ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={tempSlug}
+                      onChange={(e) => setTempSlug(e.target.value)}
+                      placeholder="web-dash"
+                      className="bg-slate-900 border border-amber-500/50 rounded-md px-2 py-0.5 text-[11px] text-amber-300 font-mono focus:outline-none w-28"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveSlug}
+                      className="p-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 cursor-pointer"
+                      title="Save Slug"
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTempSlug(authentikSlug);
+                      setIsEditingSlug(true);
+                    }}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/20 hover:border-blue-400 transition cursor-pointer flex items-center gap-1"
+                    title="Click to edit Authentik Provider slug"
+                  >
+                    <span>slug: {authentikSlug}</span>
+                    <Settings2 className="w-2.5 h-2.5 ml-0.5 opacity-70" />
+                  </button>
+                )}
               </div>
-              <p className="text-[11px] text-slate-400">
-                Single Sign-On through Authentik Identity Provider (<span className="text-amber-300 font-mono">auth.humid1.com</span>).
-              </p>
+
+              <div className="text-[11px] text-slate-400 space-y-1">
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                  <span>Identity Provider:</span>
+                  <span className="text-amber-300 font-semibold">auth.humid1.com</span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                  <span>Return Destination:</span>
+                  <span className="text-emerald-400 font-semibold truncate max-w-[200px]" title={getCurrentReturnUrl()}>
+                    {typeof window !== 'undefined' ? window.location.host : 'dash.humid1.com'}
+                  </span>
+                </div>
+              </div>
             </div>
 
             {/* Primary SSO Action Button */}
@@ -281,7 +345,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               id="btn-authentik-sso"
               type="button"
               disabled={isLoading}
-              onClick={() => handleSSORedirect(oauthClients[0]?.url)}
+              onClick={() => handleSSORedirect()}
               className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-500 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm transition shadow-xl shadow-amber-900/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               {isLoading ? (
@@ -289,27 +353,66 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               ) : (
                 <>
                   <ShieldCheck className="w-5 h-5" />
-                  <span>Sign In with Authentik SSO</span>
+                  <span>Sign In with Authentik SSO ({authentikSlug})</span>
                   <ArrowRight className="w-4 h-4 ml-1" />
                 </>
               )}
             </button>
 
-            {/* Direct Token Fallback Toggle */}
-            <div className="pt-2 border-t border-slate-800/80">
-              <button
-                type="button"
-                onClick={() => setShowDirectToken(!showDirectToken)}
-                className="text-[11px] text-slate-400 hover:text-amber-400 transition flex items-center gap-1.5 mx-auto cursor-pointer"
-              >
-                <Terminal className="w-3.5 h-3.5" />
-                <span>{showDirectToken ? 'Hide Direct Token Input' : 'Have a JWT Token directly?'}</span>
-              </button>
+            {/* Secondary SSO Options Toggle */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedSso(!showAdvancedSso)}
+                  className="text-[11px] text-slate-400 hover:text-amber-400 transition flex items-center gap-1 cursor-pointer"
+                >
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdvancedSso ? 'rotate-180' : ''}`} />
+                  <span>Alternative Login Gateways</span>
+                </button>
 
+                <button
+                  type="button"
+                  onClick={() => setShowDirectToken(!showDirectToken)}
+                  className="text-[11px] text-slate-400 hover:text-amber-400 transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Terminal className="w-3.5 h-3.5" />
+                  <span>Direct Token</span>
+                </button>
+              </div>
+
+              {/* Advanced SSO Options */}
+              {showAdvancedSso && (
+                <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2 animate-fade-in text-xs">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Available SSO Gateways:
+                  </span>
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSSORedirect(getAuthentikOidcAuthorizeUrl(authentikSlug))}
+                      className="w-full text-left px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs flex items-center justify-between transition cursor-pointer"
+                    >
+                      <span className="font-medium">Authentik OIDC Flow ({authentikSlug})</span>
+                      <ExternalLink className="w-3 h-3 text-slate-400" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSSORedirect(getThingsBoardOAuth2Url(serverUrl))}
+                      className="w-full text-left px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs flex items-center justify-between transition cursor-pointer"
+                    >
+                      <span className="font-medium">ThingsBoard OAuth2 Gateway (with return redirect)</span>
+                      <ExternalLink className="w-3 h-3 text-slate-400" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Direct Token Drawer */}
               {showDirectToken && (
-                <div className="mt-3 space-y-2 p-3 bg-slate-950 rounded-xl border border-slate-800 animate-fade-in">
+                <div className="mt-2 space-y-2 p-3 bg-slate-950 rounded-xl border border-slate-800 animate-fade-in">
                   <label className="block text-[11px] font-semibold text-slate-300">
-                    Paste ThingsBoard JWT Bearer Token:
+                    Paste JWT Bearer Token (Authentik or ThingsBoard):
                   </label>
                   <textarea
                     rows={3}
@@ -417,7 +520,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
       {/* Footer Info */}
       <div className="mt-6 text-center text-xs text-slate-400 font-mono flex items-center gap-2">
-        <span>Authentik SSO</span>
+        <span>Authentik SSO ({authentikSlug})</span>
         <span>•</span>
         <span>ThingsBoard CE</span>
         <span>•</span>
@@ -432,3 +535,4 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     </div>
   );
 };
+

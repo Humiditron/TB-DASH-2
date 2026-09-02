@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ThingsBoardConfig } from '../types';
-import { X, Server, ShieldCheck, Check, Globe, AlertCircle } from 'lucide-react';
+import { X, Server, ShieldCheck, Check, Globe, AlertCircle, Fingerprint } from 'lucide-react';
+import { getAuthentikSlug, setAuthentikSlug, APP_CONFIG } from '../config/env';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onLogin,
 }) => {
   const [serverUrl, setServerUrl] = useState(config.serverUrl);
+  const [authentikSlug, setAuthentikSlugInput] = useState(getAuthentikSlug());
   const [username, setUsername] = useState(config.username || '');
   const [password, setPassword] = useState(config.password || '');
   const [isConnecting, setIsConnecting] = useState(false);
@@ -29,6 +31,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     setIsConnecting(true);
     setStatusFeedback(null);
+
+    setAuthentikSlug(authentikSlug.trim() || 'web-dash');
 
     onSaveConfig({
       serverUrl,
@@ -49,7 +53,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     } else {
       setIsConnecting(false);
-      setStatusFeedback({ type: 'success', text: 'Host configuration saved.' });
+      setStatusFeedback({ type: 'success', text: 'SSO provider & host configuration saved.' });
       setTimeout(() => onClose(), 800);
     }
   };
@@ -64,8 +68,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-100 text-base">ThingsBoard Connection & Gateway</h3>
-              <p className="text-xs text-slate-400">Configure REST/WebSocket API endpoints and account access</p>
+              <h3 className="font-bold text-slate-100 text-base">SSO & ThingsBoard Connection</h3>
+              <p className="text-xs text-slate-400">Configure Authentik provider slug and REST API endpoints</p>
             </div>
           </div>
 
@@ -96,6 +100,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         )}
 
         <form onSubmit={handleSaveAndConnect} className="space-y-4">
+          {/* Authentik Provider Slug */}
+          <div>
+            <label htmlFor="input-authentik-slug" className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+              Authentik Application Provider Slug
+            </label>
+            <div className="relative">
+              <input
+                id="input-authentik-slug"
+                type="text"
+                value={authentikSlug}
+                onChange={(e) => setAuthentikSlugInput(e.target.value)}
+                placeholder="web-dash"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
+              />
+              <Fingerprint className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
+            </div>
+            <span className="text-[11px] text-slate-400 mt-1 block">
+              Routes to <code className="text-amber-400 font-mono">{APP_CONFIG.domains.authentikUrl}/application/o/{authentikSlug || 'web-dash'}/</code> and returns to this dashboard.
+            </span>
+          </div>
+
           {/* ThingsBoard URL */}
           <div>
             <label htmlFor="input-server-url" className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
@@ -113,7 +138,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <Globe className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
             </div>
             <span className="text-[11px] text-slate-400 mt-1 block">
-              Default proxy routes to ThingsBoard CE backend (e.g. app.humid1.com)
+              ThingsBoard CE backend instance (e.g. {APP_CONFIG.domains.thingsboardUrl})
             </span>
           </div>
 
@@ -179,3 +204,4 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     </div>
   );
 };
+

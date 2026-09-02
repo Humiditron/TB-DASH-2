@@ -29,7 +29,14 @@ import {
   SharedAttributes,
   TimeSeriesPoint,
 } from '../types';
-import { APP_CONFIG } from '../config/env';
+import {
+  APP_CONFIG,
+  getAuthentikSlug,
+  getAuthentikAppLoginUrl,
+  getAuthentikOidcAuthorizeUrl,
+  getThingsBoardOAuth2Url,
+  getCurrentReturnUrl,
+} from '../config/env';
 import { notificationService } from './notificationService';
 
 const STORAGE_KEY_TOKEN = 'humid1_tb_jwt_token';
@@ -73,7 +80,6 @@ export class ThingsBoardClientService {
     }
 
     this.initClientConfig();
-    this.handlePotentialMisdirectedAuthPath();
     this.checkForSSOCallback();
   }
 
@@ -104,22 +110,8 @@ export class ThingsBoardClientService {
   }
 
   /**
-   * If user's browser landed on dash.humid1.com/oauth2/authorization/... by accident,
-   * immediately redirect to the ThingsBoard server host.
-   */
-  private handlePotentialMisdirectedAuthPath() {
-    if (typeof window === 'undefined') return;
-
-    if (window.location.pathname.startsWith('/oauth2/authorization/')) {
-      const target = `${this.serverUrl}${window.location.pathname}${window.location.search}`;
-      console.info('[SSO Redirect] Misdirected OAuth path detected on frontend, forwarding to ThingsBoard:', target);
-      window.location.href = target;
-    }
-  }
-
-  /**
    * Check for SSO Redirect callback parameters in URL query or hash
-   * ThingsBoard forwards token after Authentik SSO login (e.g. ?token=xxx or #token=xxx)
+   * Supports Authentik SSO (web-dash) and ThingsBoard OAuth2 tokens
    */
   public checkForSSOCallback(): AuthentikUser | null {
     if (typeof window === 'undefined') return null;
@@ -132,9 +124,13 @@ export class ThingsBoardClientService {
       urlParams.get('accessToken') ||
       urlParams.get('jwtToken') ||
       urlParams.get('access_token') ||
+      urlParams.get('id_token') ||
+      urlParams.get('auth_token') ||
+      urlParams.get('bearer_token') ||
       hashParams.get('token') ||
       hashParams.get('accessToken') ||
-      hashParams.get('access_token');
+      hashParams.get('access_token') ||
+      hashParams.get('id_token');
 
     const refreshToken =
       urlParams.get('refreshToken') ||
@@ -143,24 +139,35 @@ export class ThingsBoardClientService {
       hashParams.get('refresh_token');
 
     if (token) {
-      console.info('[Authentik SSO] Detected token in URL parameters, persisting session...');
+      console.info('[Authentik SSO] Detected token in URL parameters, establishing session...');
       this.setSession(token, refreshToken || undefined);
 
-      // Clean up URL query and hash parameters cleanly
+      // Clean up URL query and hash parameters cleanly while preserving path
       const cleanUrl = window.location.origin + window.location.pathname;
       window.history.replaceState({}, document.title, cleanUrl);
 
       const decoded = this.decodeJwtPayload(token);
+      const email =
+        (decoded?.email as string) ||
+        (decoded?.preferred_username as string) ||
+        (decoded?.sub as string) ||
+        'customer@humid1.com';
+
+      const firstName = (decoded?.given_name as string) || (decoded?.firstName as string) || undefined;
+      const lastName = (decoded?.family_name as string) || (decoded?.lastName as string) || undefined;
+      const name =
+        (decoded?.name as string) ||
+        [firstName, lastName].filter(Boolean).join(' ') ||
+        (decoded?.preferred_username as string) ||
+        email;
+
       const user: AuthentikUser = {
         id: (decoded?.userId as string) || (decoded?.sub as string) || 'tb-user-authentik',
-        email: (decoded?.sub as string) || (decoded?.email as string) || 'user@humid1.com',
-        firstName: (decoded?.firstName as string) || undefined,
-        lastName: (decoded?.lastName as string) || undefined,
-        name:
-          [decoded?.firstName, decoded?.lastName].filter(Boolean).join(' ') ||
-          (decoded?.sub as string) ||
-          'Authentik User',
-        authority: (decoded?.scopes as any)?.[0] || 'CUSTOMER_USER',
+        email,
+        firstName,
+        lastName,
+        name,
+        authority: (decoded?.scopes as any)?.[0] || (decoded?.role as string) || 'CUSTOMER_USER',
         customerId: (decoded?.customerId as string) || undefined,
         tenantId: (decoded?.tenantId as string) || undefined,
         isSimulated: false,
@@ -169,7 +176,7 @@ export class ThingsBoardClientService {
       this.currentUser = user;
       localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
 
-      // Asynchronously fetch complete user profile from server
+      // Asynchronously fetch complete user profile from server if valid ThingsBoard JWT
       this.fetchCurrentUser().catch(() => {});
       return user;
     }
@@ -226,38 +233,57 @@ export class ThingsBoardClientService {
   }
 
   /**
-   * Fetch available OAuth2 / Authentik SSO clients configured on ThingsBoard
-   * Ensures absolute URLs targeting ThingsBoard backend (app.humid1.com)
+   * Fetch available OAuth2 / Authentik SSO clients
+   * Prioritizes direct Authentik application flow (web-dash) that returns directly to this dashboard
    */
   public async getAvailableOAuth2Clients(): Promise<OAuth2ClientOption[]> {
+    const slug = getAuthentikSlug();
+    const returnUrl = getCurrentReturnUrl();
+
+    const directAuthentikUrl = getAuthentikAppLoginUrl(slug, returnUrl);
+    const thingsBoardOAuthUrl = getThingsBoardOAuth2Url(this.serverUrl, returnUrl);
+
     try {
       const response = await apiGetOauth2Clients();
-      if (response.data && Array.isArray(response.data)) {
-        return response.data.map((clientItem: any) => {
+      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+        const tbClients = response.data.map((clientItem: any) => {
           let resolvedUrl = clientItem.url;
           if (!resolvedUrl) {
-            resolvedUrl = `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}`;
+            resolvedUrl = `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           } else if (resolvedUrl.startsWith('/')) {
-            resolvedUrl = `${this.serverUrl}${resolvedUrl}`;
+            resolvedUrl = `${this.serverUrl}${resolvedUrl}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           }
 
           return {
-            name: clientItem.title || clientItem.name || 'Authentik SSO (Humid1)',
+            name: clientItem.title || clientItem.name || 'ThingsBoard OAuth2 Gateway',
             icon: clientItem.icon || 'authentik',
             url: resolvedUrl,
           };
         });
+
+        return [
+          {
+            name: `Authentik SSO (${slug})`,
+            icon: 'authentik',
+            url: directAuthentikUrl,
+          },
+          ...tbClients,
+        ];
       }
     } catch (err) {
       console.warn('[ThingsBoard SSO] Unable to fetch OAuth2 clients list from server:', err);
     }
 
-    // Default fallback pointing directly to ThingsBoard Authentik authorization endpoint
     return [
       {
-        name: 'Authentik SSO (Humid1 Identity)',
+        name: `Authentik SSO (${slug})`,
         icon: 'authentik',
-        url: `${this.serverUrl}/oauth2/authorization/authentik`,
+        url: directAuthentikUrl,
+      },
+      {
+        name: 'ThingsBoard OAuth2 Gateway',
+        icon: 'authentik',
+        url: thingsBoardOAuthUrl,
       },
     ];
   }
