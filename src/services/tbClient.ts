@@ -97,6 +97,7 @@ export class ThingsBoardClientService {
     client.interceptors.request.use((request, options) => {
       if (this.token) {
         request.headers.set('X-Authorization', `Bearer ${this.token}`);
+        request.headers.set('Authorization', `Bearer ${this.token}`);
       }
       const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
       (request as any).__txId = txId;
