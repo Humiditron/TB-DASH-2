@@ -1,0 +1,6 @@
+{
+  "name": "HUMID1_OS Dashboard",
+  "description": "Real-time ThingsBoard humidor telemetry monitoring, historical climate visualizer, and hardware control center.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

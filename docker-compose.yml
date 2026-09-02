@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  humid1-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/humiditron/tb-dash-2:latest
+    container_name: humid1-dashboard
+    restart: unless-stopped
+    ports:
+      - "5000"
+    environment:
+      - NODE_ENV=production
+      - DASHBOARD_URL=https://dash.humid1.com
+      - THINGSBOARD_SERVER_URL=https://app.humid1.com
+      - AUTHENTIK_URL=https://auth.humid1.com
+      - CAPTCHA_URL=https://cap.humid1.com
+      - CHAT_URL=https://chat.humid1.com
+      - SSO_AUTH_ENDPOINT=https://app.humid1.com/oauth2/authorization/authentik
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - humid1-net
+
+networks:
+  humid1-net:
+    driver: bridge
