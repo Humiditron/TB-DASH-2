@@ -61,18 +61,24 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
 
         {/* Continuous Auto-Scrolling Marquee Track */}
         <div className="flex-1 overflow-hidden relative">
-          <div
-            className={`animate-ticker flex items-center gap-3 py-1 px-3 ${
-              isPaused ? 'ticker-paused' : ''
-            }`}
-          >
-            {repeatedDevices.map((device, idx) => {
-              const isSelected = device.id === selectedDeviceId;
-              const isRhSafe = device.telemetry.rh >= 65 && device.telemetry.rh <= 75;
-              const isTempSafe = device.telemetry.temp <= 75.0;
-              const isBatteryLow = device.telemetry.battery < 20;
-              const isOffline = device.status === 'OFFLINE';
-              const rssiInfo = getRssiQuality(device.telemetry.rssi);
+          {devices.length === 0 ? (
+            <div className="flex items-center px-4 text-[11px] font-mono text-slate-400 gap-3">
+              <span className="text-amber-400 font-bold">AWAITING HARDWARE:</span>
+              <span>No physical humidor units currently claimed. Open Claiming Hub to bind your ESP32 device.</span>
+            </div>
+          ) : (
+            <div
+              className={`animate-ticker flex items-center gap-3 py-1 px-3 ${
+                isPaused ? 'ticker-paused' : ''
+              }`}
+            >
+              {repeatedDevices.map((device, idx) => {
+                const isSelected = device.id === selectedDeviceId;
+                const isRhSafe = device.telemetry.rh >= 65 && device.telemetry.rh <= 75;
+                const isTempSafe = device.telemetry.temp <= 75.0;
+                const isBatteryLow = device.telemetry.battery < 20;
+                const isOffline = device.status === 'OFFLINE';
+                const rssiInfo = getRssiQuality(device.telemetry.rssi);
 
               return (
                 <button
@@ -170,8 +176,9 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
               );
             })}
           </div>
-        </div>
+        )}
       </div>
     </div>
-  );
+  </div>
+);
 };

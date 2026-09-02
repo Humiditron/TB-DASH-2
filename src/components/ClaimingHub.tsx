@@ -7,16 +7,11 @@ import {
   RefreshCw,
   Trash2,
   CheckCircle2,
-  AlertTriangle,
   AlertCircle,
-  Clock,
   Terminal,
   Activity,
   Layers,
-  Sparkles,
-  ExternalLink,
-  Radio,
-  Wifi,
+  Inbox,
 } from 'lucide-react';
 import { HumidorDevice, AuthentikUser, ClaimLogEntry } from '../types';
 import { tbClient } from '../services/tbClient';
@@ -30,13 +25,6 @@ interface ClaimingHubProps {
   selectedDeviceId: string;
 }
 
-const PRESET_UNITS = [
-  { name: 'HUMID1-CABINET-01', pin: '882190', label: 'Main Cabinet (ESP32-S3)' },
-  { name: 'HUMID1-AGING-02', pin: '419024', label: 'Aging Vault Box (ESP32-C3)' },
-  { name: 'HUMID1-TRAVEL-03', pin: '730198', label: 'Travel Case (ESP32 Pico)' },
-  { name: 'HUMID1-VAULT-04', pin: '556129', label: 'Reserve Locker (ESP32-S3)' },
-];
-
 export const ClaimingHub: React.FC<ClaimingHubProps> = ({
   currentUser,
   devices,
@@ -45,8 +33,8 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
   onSelectDevice,
   selectedDeviceId,
 }) => {
-  const [deviceName, setDeviceName] = useState('HUMID1-VAULT-04');
-  const [secretKey, setSecretKey] = useState('556129');
+  const [deviceName, setDeviceName] = useState('');
+  const [secretKey, setSecretKey] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState<{ success: boolean; message: string; raw?: unknown } | null>(null);
   const [claimLogs, setClaimLogs] = useState<ClaimLogEntry[]>(tbClient.getClaimLogs());
@@ -73,6 +61,8 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
         raw: result.rawResponse,
       });
       onDeviceClaimed(result.device);
+      setDeviceName('');
+      setSecretKey('');
     } else {
       setLastResult({
         success: false,
@@ -80,12 +70,6 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
         raw: result.rawResponse,
       });
     }
-  };
-
-  const handlePresetSelect = (presetName: string, presetPin: string) => {
-    setDeviceName(presetName);
-    setSecretKey(presetPin);
-    setLastResult(null);
   };
 
   const handleReclaimDevice = async (device: HumidorDevice) => {
@@ -128,16 +112,11 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/30">
                 {currentUser?.authority || 'CUSTOMER_USER'}
               </span>
-              {currentUser?.isSimulated && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-300 border border-blue-500/30">
-                  Demo Mode
-                </span>
-              )}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
               Customer ID:{' '}
               <span className="font-mono text-slate-300">
-                {currentUser?.customerId || '784f394c-42b6-435a-983c-b7beff2784f9'}
+                {currentUser?.customerId || 'Unassigned (Tenant Scoped)'}
               </span>
             </p>
           </div>
@@ -148,7 +127,7 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
             type="button"
             onClick={handleRefreshDeviceList}
             disabled={isRefreshingList}
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-2 cursor-pointer"
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingList ? 'animate-spin' : ''}`} />
             <span>Sync Registered Devices</span>
@@ -164,74 +143,52 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
             <div className="border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2 text-amber-400 mb-1">
                 <PlusCircle className="w-5 h-5" />
-                <h3 className="font-bold text-slate-100 text-base">Claim New Humidor Unit</h3>
+                <h3 className="font-bold text-slate-100 text-base">Claim Real Humidor Hardware</h3>
               </div>
               <p className="text-xs text-slate-400">
-                Bind unassigned ESP32 hardware to your ThingsBoard Customer register using the device claim key.
+                Submit device credentials to execute real ThingsBoard claiming protocol (<code className="text-amber-300 font-mono">POST /api/customer/device/&#123;name&#125;/claim</code>).
               </p>
-            </div>
-
-            {/* Quick Presets for Easy Testing */}
-            <div className="space-y-2">
-              <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                Quick Test Hardware Presets
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {PRESET_UNITS.map((p) => (
-                  <button
-                    key={p.name}
-                    type="button"
-                    onClick={() => handlePresetSelect(p.name, p.pin)}
-                    className={`p-2.5 rounded-xl border text-left text-xs transition cursor-pointer ${
-                      deviceName === p.name
-                        ? 'bg-amber-500/15 border-amber-500/40 text-amber-200'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="font-mono font-bold text-[11px] truncate">{p.name}</div>
-                    <div className="text-[10px] text-slate-400 truncate">{p.label}</div>
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* Claiming Form */}
             <form onSubmit={handleClaimSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                <label htmlFor="hub-input-dev-name" className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Device Name / Identifier
                 </label>
                 <div className="relative">
                   <input
+                    id="hub-input-dev-name"
                     type="text"
                     value={deviceName}
                     onChange={(e) => setDeviceName(e.target.value)}
-                    placeholder="e.g. HUMID1-CABINET-01"
+                    placeholder="e.g. HUMID1-ESP32-01"
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
                   />
                   <Cpu className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Must match the hardware device name configured in ThingsBoard
+                  Must match the exact device name configured on your ThingsBoard instance
                 </span>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Secret Claim PIN / Authorization Code
+                <label htmlFor="hub-input-sec-key" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Secret Claim PIN / Authorization Key
                 </label>
                 <div className="relative">
                   <input
-                    type="text"
+                    id="hub-input-sec-key"
+                    type="password"
                     value={secretKey}
                     onChange={(e) => setSecretKey(e.target.value)}
-                    placeholder="e.g. 882190"
+                    placeholder="Optional secret key"
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
                   />
                   <KeyRound className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Found on the unit packaging or on-screen OLED pairing prompt
+                  Leave blank if claiming without secretKey or provide the provisioned PIN
                 </span>
               </div>
 
@@ -249,7 +206,7 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
                   ) : (
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
                   )}
-                  <div className="space-y-1">
+                  <div className="space-y-1 w-full">
                     <p className="font-semibold">{lastResult.message}</p>
                     {lastResult.raw && (
                       <pre className="text-[10px] font-mono bg-slate-950/60 p-2 rounded border border-slate-800 max-h-24 overflow-auto">
@@ -283,13 +240,10 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
           <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 text-xs text-slate-400 space-y-2">
             <h4 className="font-bold text-slate-200 flex items-center gap-2">
               <Terminal className="w-4 h-4 text-amber-400" />
-              <span>ThingsBoard Claiming Architecture</span>
+              <span>Real Hardware Claiming Protocol</span>
             </h4>
             <p className="leading-relaxed text-[11px]">
-              ThingsBoard enables customer self-provisioning via{' '}
-              <code className="text-amber-300 font-mono">POST /api/customer/device/claim</code>. The
-              device publishes its claim payload with a secret PIN; when this client submits matching credentials,
-              the device is moved into the customer group and unlocked.
+              When an unassigned ESP32/C3 device powers on and connects to Wi-Fi, it publishes its claim data via MQTT/HTTP. When you click Claim above, the server assigns the device to your customer group and unlocks telemetry streaming.
             </p>
           </div>
         </div>
@@ -301,10 +255,10 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
               <div>
                 <h3 className="font-bold text-slate-100 text-base flex items-center gap-2">
                   <Layers className="w-5 h-5 text-amber-400" />
-                  <span>Claimed Devices Inventory ({devices.length})</span>
+                  <span>Your Claimed Devices ({devices.length})</span>
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Hardware currently linked to your customer register
+                  Hardware provisioned to your ThingsBoard account
                 </p>
               </div>
             </div>
@@ -338,13 +292,10 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
                           >
                             {device.status}
                           </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                            CLAIMED
-                          </span>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-400">
-                          <span>Identifier: {device.clientAttributes.device_name}</span>
+                          <span>Name: {device.clientAttributes.device_name}</span>
                           <span>•</span>
                           <span>MAC: {device.clientAttributes.mac_address}</span>
                           <span>•</span>
@@ -355,7 +306,7 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
                       {/* Right Telemetry Snapshot & Actions */}
                       <div className="flex items-center gap-3">
                         <div className="text-right font-mono text-xs hidden sm:block">
-                          <div className="text-emerald-400 font-bold">{device.telemetry.rh}% RH</div>
+                          <div className="text-amber-400 font-bold">{device.telemetry.rh}% RH</div>
                           <div className="text-slate-400">{device.telemetry.temp}°F</div>
                         </div>
 
@@ -386,8 +337,12 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
               })}
 
               {devices.length === 0 && (
-                <div className="p-8 text-center bg-slate-950 rounded-2xl border border-slate-800 text-slate-400 text-xs">
-                  No devices currently claimed. Use the form on the left to claim your first humidor unit.
+                <div className="p-8 text-center bg-slate-950 rounded-2xl border border-slate-800 text-slate-400 text-xs space-y-2">
+                  <Inbox className="w-8 h-8 text-slate-600 mx-auto" />
+                  <p className="font-semibold text-slate-300">No hardware currently connected</p>
+                  <p className="text-slate-500 max-w-sm mx-auto">
+                    Claim your physical humidor unit using the form on the left to start live telemetry logging.
+                  </p>
                 </div>
               )}
             </div>
@@ -407,7 +362,7 @@ export const ClaimingHub: React.FC<ClaimingHubProps> = ({
                     tbClient.clearClaimLogs();
                     setClaimLogs([]);
                   }}
-                  className="text-[11px] text-slate-400 hover:text-slate-200 transition"
+                  className="text-[11px] text-slate-400 hover:text-slate-200 transition cursor-pointer"
                 >
                   Clear Logs
                 </button>

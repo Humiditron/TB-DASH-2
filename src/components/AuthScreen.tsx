@@ -5,16 +5,13 @@ import {
   Server,
   Lock,
   ArrowRight,
-  Sparkles,
   AlertCircle,
-  CheckCircle2,
   Globe,
   ExternalLink,
   Layers,
   Terminal,
   MessageSquare,
-  HelpCircle,
-  Radio,
+  CheckCircle2,
 } from 'lucide-react';
 import { AuthentikUser, OAuth2ClientOption } from '../types';
 import { tbClient } from '../services/tbClient';
@@ -33,10 +30,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   onUpdateServerUrl,
 }) => {
   const [activeMode, setActiveMode] = useState<'sso' | 'credentials' | 'config'>('sso');
-  const [username, setUsername] = useState('customer@humid1.internal');
-  const [password, setPassword] = useState('Humid1@Secure2026!');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [tempServerUrl, setTempServerUrl] = useState(serverUrl);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState('Authenticating...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [oauthClients, setOauthClients] = useState<OAuth2ClientOption[]>([]);
   const [directTokenInput, setDirectTokenInput] = useState('');
@@ -44,58 +42,68 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [isEcosystemOpen, setIsEcosystemOpen] = useState(false);
 
   useEffect(() => {
-    // Load available SSO clients from server
-    tbClient.getAvailableOAuth2Clients().then((clients) => {
-      setOauthClients(clients);
-    });
+    // 1. Immediately check if URL contains SSO token callback
+    const callbackUser = tbClient.checkForSSOCallback();
+    if (callbackUser) {
+      onAuthenticated(callbackUser);
+      return;
+    }
 
-    // Check if token already exists in localStorage or URL callback
-    const user = tbClient.getCurrentUser();
-    if (user) {
-      onAuthenticated(user);
+    // 2. Check if user already authenticated in localStorage
+    const existingUser = tbClient.getCurrentUser();
+    if (existingUser && tbClient.getToken()) {
+      onAuthenticated(existingUser);
+      return;
     } else if (tbClient.getToken()) {
       tbClient.fetchCurrentUser().then((u) => {
         if (u) onAuthenticated(u);
       });
     }
+
+    // 3. Load available SSO clients from ThingsBoard
+    tbClient.getAvailableOAuth2Clients().then((clients) => {
+      setOauthClients(clients);
+    });
   }, [onAuthenticated]);
 
-  const handleSSORedirect = (oauthUrl?: string) => {
+  const handleSSORedirect = (customUrl?: string) => {
     setIsLoading(true);
+    setLoadingText('Redirecting to Authentik SSO...');
     setErrorMessage(null);
 
-    const targetUrl = oauthUrl || APP_CONFIG.ssoAuthorizationEndpoint || `${serverUrl}/oauth2/authorization/authentik`;
-
-    // In simulated or preview environment, simulate Authentik SSO login
-    if (tbClient.isSimulatedMode()) {
-      setTimeout(() => {
-        tbClient.loginWithCredentials('authentik.user@humid1.com', 'password').then((res) => {
-          setIsLoading(false);
-          if (res.success && res.user) {
-            onAuthenticated(res.user);
-          }
-        });
-      }, 700);
-      return;
+    // Get authorization endpoint URL on ThingsBoard host (e.g. app.humid1.com/oauth2/authorization/...)
+    let targetUrl = customUrl;
+    if (!targetUrl) {
+      if (oauthClients.length > 0 && oauthClients[0].url) {
+        targetUrl = oauthClients[0].url;
+      } else {
+        targetUrl = `${serverUrl}/oauth2/authorization/authentik`;
+      }
     }
 
-    // In live environment, initiate OAuth2 SSO flow
+    // Ensure absolute target
+    if (!targetUrl.startsWith('http')) {
+      targetUrl = `${serverUrl}${targetUrl.startsWith('/') ? '' : '/'}${targetUrl}`;
+    }
+
+    console.info('[Authentik SSO] Initiating SSO redirect to:', targetUrl);
     try {
       window.location.href = targetUrl;
-    } catch {
+    } catch (err) {
       setIsLoading(false);
-      setErrorMessage('Failed to redirect to Authentik SSO portal. Please verify server URL.');
+      setErrorMessage('Failed to initiate Authentik redirect. Please verify ThingsBoard server host.');
     }
   };
 
   const handleCredentialsLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
-      setErrorMessage('Please enter both username and password.');
+      setErrorMessage('Please enter both your customer email and password.');
       return;
     }
 
     setIsLoading(true);
+    setLoadingText('Verifying credentials with ThingsBoard...');
     setErrorMessage(null);
 
     const res = await tbClient.loginWithCredentials(username.trim(), password.trim());
@@ -104,7 +112,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     if (res.success && res.user) {
       onAuthenticated(res.user);
     } else {
-      setErrorMessage(res.error || 'Authentication failed. Please verify your ThingsBoard customer account credentials.');
+      setErrorMessage(
+        res.error || 'Authentication failed. Please verify your ThingsBoard customer account credentials.'
+      );
     }
   };
 
@@ -119,10 +129,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const handleApplyDirectToken = async () => {
     if (!directTokenInput.trim()) return;
     setIsLoading(true);
+    setLoadingText('Validating bearer token...');
     setErrorMessage(null);
 
     tbClient.setSession(directTokenInput.trim());
-    tbClient.setSimulatedMode(false);
     const user = await tbClient.fetchCurrentUser();
     setIsLoading(false);
 
@@ -132,8 +142,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       const decoded = tbClient.decodeJwtPayload(directTokenInput.trim());
       const fallbackUser: AuthentikUser = {
         id: (decoded?.userId as string) || 'tb-user-from-jwt',
-        email: (decoded?.sub as string) || 'authentik.user@customer.io',
-        name: (decoded?.firstName as string) || 'Authentik Customer',
+        email: (decoded?.sub as string) || 'customer@humid1.com',
+        name: (decoded?.firstName as string) || 'Customer User',
         authority: (decoded?.scopes as any)?.[0] || 'CUSTOMER_USER',
         customerId: (decoded?.customerId as string) || undefined,
         tenantId: (decoded?.tenantId as string) || undefined,
@@ -143,20 +153,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
   };
 
-  const handleQuickDemoAccess = () => {
-    tbClient.setSimulatedMode(true);
-    tbClient.loginWithCredentials('demo.customer@humid1.com', 'demo').then((res) => {
-      if (res.user) {
-        onAuthenticated(res.user);
-      }
-    });
-  };
-
   return (
     <div id="auth-portal" className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 py-8 relative overflow-hidden">
-      {/* Background Lighting */}
+      {/* Subtle Background Ambience */}
       <div className="absolute -top-40 -left-40 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-slate-800/20 rounded-full blur-3xl pointer-events-none" />
 
       {/* Top Domain Map Status Strip */}
       <div className="w-full max-w-lg mb-4 flex items-center justify-between px-2 text-xs">
@@ -166,23 +167,23 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           className="flex items-center gap-1.5 text-slate-400 hover:text-amber-400 transition cursor-pointer bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800"
         >
           <Layers className="w-3.5 h-3.5 text-amber-400" />
-          <span className="font-mono text-[11px]">Domain Map: 5 Services Connected</span>
+          <span className="font-mono text-[11px]">System Topology & Services</span>
         </button>
 
         <a
           href={APP_CONFIG.domains.chatUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-slate-400 hover:text-purple-300 transition cursor-pointer bg-purple-950/40 hover:bg-purple-950/70 px-3 py-1.5 rounded-full border border-purple-800/50"
+          className="flex items-center gap-1.5 text-slate-400 hover:text-amber-300 transition cursor-pointer bg-slate-900/80 hover:bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800"
         >
-          <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
-          <span className="font-semibold text-[11px]">Live Concierge</span>
-          <ExternalLink className="w-3 h-3 text-purple-400" />
+          <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+          <span className="font-semibold text-[11px]">Humid1 Support</span>
+          <ExternalLink className="w-3 h-3 text-slate-400" />
         </a>
       </div>
 
       {/* Main Card Container */}
-      <div className="w-full max-w-lg bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md relative z-10 space-y-6">
+      <div className="w-full max-w-lg bg-slate-900/95 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md relative z-10 space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 mb-1">
@@ -192,18 +193,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             HUMID1<span className="text-amber-400">_OS</span>
           </h1>
           <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-            Customer Telemetry Portal • Authentik SSO • IoT Device Claiming
+            Production Humidor Telemetry • Authentik SSO • ThingsBoard CE
           </p>
-        </div>
-
-        {/* White-Glove Onboarding Helper */}
-        <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2.5">
-          <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <strong className="text-amber-300">White-Glove Access:</strong> Click{' '}
-            <span className="text-slate-100 font-semibold">"Sign In with Authentik SSO"</span> for 1-click login, or tap{' '}
-            <span className="text-slate-100 font-semibold">"Quick Demo Mode"</span> below to explore without credentials.
-          </div>
         </div>
 
         {/* Mode Navigation Tabs */}
@@ -256,7 +247,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             }`}
           >
             <Server className="w-3.5 h-3.5" />
-            <span>Server Map</span>
+            <span>Endpoint</span>
           </button>
         </div>
 
@@ -277,11 +268,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   Target ThingsBoard Instance
                 </span>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  {APP_CONFIG.domains.thingsboardUrl.replace(/^https?:\/\//, '')}
+                  {serverUrl.replace(/^https?:\/\//, '')}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Authentik Identity Provider (<span className="text-blue-300 font-mono">auth.humid1.com</span>) authenticates your account and grants token access.
+                Single Sign-On through Authentik Identity Provider (<span className="text-amber-300 font-mono">auth.humid1.com</span>).
               </p>
             </div>
 
@@ -294,7 +285,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-500 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm transition shadow-xl shadow-amber-900/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               {isLoading ? (
-                <span>Connecting to Authentik SSO...</span>
+                <span>{loadingText}</span>
               ) : (
                 <>
                   <ShieldCheck className="w-5 h-5" />
@@ -312,19 +303,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 className="text-[11px] text-slate-400 hover:text-amber-400 transition flex items-center gap-1.5 mx-auto cursor-pointer"
               >
                 <Terminal className="w-3.5 h-3.5" />
-                <span>{showDirectToken ? 'Hide Direct Token Paste' : 'Have a JWT token directly? (Forward Auth)'}</span>
+                <span>{showDirectToken ? 'Hide Direct Token Input' : 'Have a JWT Token directly?'}</span>
               </button>
 
               {showDirectToken && (
                 <div className="mt-3 space-y-2 p-3 bg-slate-950 rounded-xl border border-slate-800 animate-fade-in">
                   <label className="block text-[11px] font-semibold text-slate-300">
-                    Paste Authentik / ThingsBoard Bearer Token (JWT):
+                    Paste ThingsBoard JWT Bearer Token:
                   </label>
                   <textarea
                     rows={3}
                     value={directTokenInput}
                     onChange={(e) => setDirectTokenInput(e.target.value)}
-                    placeholder="eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOi..."
+                    placeholder="eyJhbGciOiJIUzUxMiJ9..."
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-amber-500"
                   />
                   <button
@@ -345,12 +336,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {activeMode === 'credentials' && (
           <form onSubmit={handleCredentialsLogin} className="space-y-4 animate-fade-in">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor="input-login-username" className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Customer Email / Username
               </label>
               <input
                 id="input-login-username"
-                type="email"
+                type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="customer@humid1.com"
@@ -359,7 +350,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor="input-login-password" className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Password
               </label>
               <input
@@ -379,11 +370,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               className="w-full py-3 px-4 rounded-xl bg-slate-100 hover:bg-white text-slate-950 font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-2"
             >
               {isLoading ? (
-                <span>Authenticating with ThingsBoard...</span>
+                <span>{loadingText}</span>
               ) : (
                 <>
                   <Lock className="w-4 h-4" />
-                  <span>Authenticate Customer Account</span>
+                  <span>Authenticate with ThingsBoard</span>
                 </>
               )}
             </button>
@@ -394,7 +385,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {activeMode === 'config' && (
           <form onSubmit={handleApplyServerConfig} className="space-y-4 animate-fade-in">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label htmlFor="input-server-url" className="block text-xs font-semibold text-slate-300 mb-1.5">
                 ThingsBoard Endpoint URL
               </label>
               <div className="relative">
@@ -409,7 +400,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <Globe className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
               </div>
               <span className="text-[11px] text-slate-400 mt-1 block">
-                Aggregated from environment: <code className="text-amber-400 font-mono">{APP_CONFIG.domains.thingsboardUrl}</code>
+                Default: <code className="text-amber-400 font-mono">{APP_CONFIG.domains.thingsboardUrl}</code>
               </span>
             </div>
 
@@ -422,30 +413,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </button>
           </form>
         )}
-
-        {/* Quick Demo Access Bar */}
-        <div className="pt-3 border-t border-slate-800 text-center">
-          <button
-            type="button"
-            id="btn-quick-demo"
-            onClick={handleQuickDemoAccess}
-            className="w-full py-2.5 px-4 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-amber-300 transition flex items-center justify-center gap-2 cursor-pointer font-medium"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Launch Quick Demo Mode (Instant Telemetry & Claiming Test)</span>
-          </button>
-        </div>
       </div>
 
       {/* Footer Info */}
       <div className="mt-6 text-center text-xs text-slate-400 font-mono flex items-center gap-2">
         <span>Authentik SSO</span>
         <span>•</span>
-        <span>ThingsBoard 3.1+</span>
+        <span>ThingsBoard CE</span>
         <span>•</span>
-        <span>cap.humid1.com</span>
-        <span>•</span>
-        <span>chat.humid1.com</span>
+        <span>Hardware Claiming Ready</span>
       </div>
 
       {/* Ecosystem Modal */}

@@ -47,7 +47,7 @@
   display: inline-flex;
   width: max-content;
   will-change: transform;
-  animation: ticker-scroll 32s linear infinite;
+  animation: ticker-scroll 85s linear infinite;
 }
 
 .animate-ticker:hover,

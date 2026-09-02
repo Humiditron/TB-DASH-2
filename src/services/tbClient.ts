@@ -8,37 +8,40 @@ import {
   claimDevice as apiClaimDevice,
   reClaimDevice as apiReClaimDevice,
   getCustomerDeviceInfos as apiGetCustomerDeviceInfos,
-  getCustomerDevices as apiGetCustomerDevices,
+  getTenantDeviceInfos as apiGetTenantDeviceInfos,
+  getLatestTimeseries as apiGetLatestTimeseries,
+  getAttributesByScope as apiGetAttributesByScope,
   saveDeviceAttributes as apiSaveDeviceAttributes,
+  getAllAlarmsV2 as apiGetAllAlarmsV2,
+  ackAlarm as apiAckAlarm,
+  clearAlarm as apiClearAlarm,
 } from '../../src_lib/client/services.gen';
 import type {
   User,
   ClaimDeviceData,
-  ClaimRequest,
 } from '../../src_lib/client/types.gen';
 import {
   AuthentikUser,
   ClaimLogEntry,
   HumidorDevice,
   OAuth2ClientOption,
-  ThingsBoardConfig,
+  HumidorAlarm,
   SharedAttributes,
+  TimeSeriesPoint,
 } from '../types';
-import { INITIAL_DEVICES, generateHistory } from './thingsboard';
 import { APP_CONFIG } from '../config/env';
+import { notificationService } from './notificationService';
 
 const STORAGE_KEY_TOKEN = 'humid1_tb_jwt_token';
 const STORAGE_KEY_REFRESH = 'humid1_tb_jwt_refresh';
 const STORAGE_KEY_USER = 'humid1_tb_user_profile';
 const STORAGE_KEY_SERVER = 'humid1_tb_server_url';
-const STORAGE_KEY_SIMULATED = 'humid1_tb_simulated_mode';
 const STORAGE_KEY_CLAIM_LOGS = 'humid1_tb_claim_logs';
 
 export class ThingsBoardClientService {
   private serverUrl: string;
   private token: string | null = null;
   private refreshToken: string | null = null;
-  private isSimulated: boolean = false;
   private currentUser: AuthentikUser | null = null;
   private claimLogs: ClaimLogEntry[] = [];
 
@@ -50,8 +53,15 @@ export class ThingsBoardClientService {
 
     this.token = localStorage.getItem(STORAGE_KEY_TOKEN) || null;
     this.refreshToken = localStorage.getItem(STORAGE_KEY_REFRESH) || null;
-    const simStored = localStorage.getItem(STORAGE_KEY_SIMULATED);
-    this.isSimulated = simStored === 'true' || (!this.token && !APP_CONFIG.domains.thingsboardUrl);
+
+    try {
+      const storedUser = localStorage.getItem(STORAGE_KEY_USER);
+      if (storedUser) {
+        this.currentUser = JSON.parse(storedUser);
+      }
+    } catch {
+      this.currentUser = null;
+    }
 
     try {
       const logs = localStorage.getItem(STORAGE_KEY_CLAIM_LOGS);
@@ -63,6 +73,7 @@ export class ThingsBoardClientService {
     }
 
     this.initClientConfig();
+    this.handlePotentialMisdirectedAuthPath();
     this.checkForSSOCallback();
   }
 
@@ -85,20 +96,30 @@ export class ThingsBoardClientService {
 
     // Response interceptor for automatic silent token refresh
     client.interceptors.response.use(async (response) => {
-      if (response.status === 401 && this.refreshToken && !this.isSimulated) {
-        const refreshed = await this.trySilentTokenRefresh();
-        if (refreshed) {
-          // Token refreshed, but client-fetch might not auto-replay automatically without custom client wrapper.
-          console.info('[ThingsBoard Auth] Token silently refreshed');
-        }
+      if (response.status === 401 && this.refreshToken) {
+        await this.trySilentTokenRefresh();
       }
       return response;
     });
   }
 
   /**
+   * If user's browser landed on dash.humid1.com/oauth2/authorization/... by accident,
+   * immediately redirect to the ThingsBoard server host.
+   */
+  private handlePotentialMisdirectedAuthPath() {
+    if (typeof window === 'undefined') return;
+
+    if (window.location.pathname.startsWith('/oauth2/authorization/')) {
+      const target = `${this.serverUrl}${window.location.pathname}${window.location.search}`;
+      console.info('[SSO Redirect] Misdirected OAuth path detected on frontend, forwarding to ThingsBoard:', target);
+      window.location.href = target;
+    }
+  }
+
+  /**
    * Check for SSO Redirect callback parameters in URL query or hash
-   * e.g., ?token=xxx&refreshToken=yyy from Authentik OAuth2 -> ThingsBoard redirect
+   * ThingsBoard forwards token after Authentik SSO login (e.g. ?token=xxx or #token=xxx)
    */
   public checkForSSOCallback(): AuthentikUser | null {
     if (typeof window === 'undefined') return null;
@@ -106,34 +127,54 @@ export class ThingsBoardClientService {
     const urlParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
 
-    const token = urlParams.get('token') || urlParams.get('accessToken') || hashParams.get('token');
-    const refreshToken = urlParams.get('refreshToken') || hashParams.get('refreshToken');
+    const token =
+      urlParams.get('token') ||
+      urlParams.get('accessToken') ||
+      urlParams.get('jwtToken') ||
+      urlParams.get('access_token') ||
+      hashParams.get('token') ||
+      hashParams.get('accessToken') ||
+      hashParams.get('access_token');
+
+    const refreshToken =
+      urlParams.get('refreshToken') ||
+      urlParams.get('refresh_token') ||
+      hashParams.get('refreshToken') ||
+      hashParams.get('refresh_token');
 
     if (token) {
-      console.info('[Authentik SSO] Detected token in URL parameters, saving session...');
+      console.info('[Authentik SSO] Detected token in URL parameters, persisting session...');
       this.setSession(token, refreshToken || undefined);
-      this.isSimulated = false;
-      localStorage.setItem(STORAGE_KEY_SIMULATED, 'false');
 
-      // Clean up URL query parameters cleanly
+      // Clean up URL query and hash parameters cleanly
       const cleanUrl = window.location.origin + window.location.pathname;
       window.history.replaceState({}, document.title, cleanUrl);
 
       const decoded = this.decodeJwtPayload(token);
       const user: AuthentikUser = {
-        id: (decoded?.userId as string) || 'tb-user-authentik',
-        email: (decoded?.sub as string) || 'authentik.user@customer.io',
-        name: (decoded?.firstName as string) || (decoded?.sub as string) || 'Customer (Authentik SSO)',
+        id: (decoded?.userId as string) || (decoded?.sub as string) || 'tb-user-authentik',
+        email: (decoded?.sub as string) || (decoded?.email as string) || 'user@humid1.com',
+        firstName: (decoded?.firstName as string) || undefined,
+        lastName: (decoded?.lastName as string) || undefined,
+        name:
+          [decoded?.firstName, decoded?.lastName].filter(Boolean).join(' ') ||
+          (decoded?.sub as string) ||
+          'Authentik User',
         authority: (decoded?.scopes as any)?.[0] || 'CUSTOMER_USER',
         customerId: (decoded?.customerId as string) || undefined,
         tenantId: (decoded?.tenantId as string) || undefined,
         isSimulated: false,
       };
+
       this.currentUser = user;
       localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
+
+      // Asynchronously fetch complete user profile from server
+      this.fetchCurrentUser().catch(() => {});
       return user;
     }
-    return null;
+
+    return this.currentUser;
   }
 
   public setServerUrl(url: string) {
@@ -154,18 +195,6 @@ export class ThingsBoardClientService {
     return this.refreshToken;
   }
 
-  public isSimulatedMode(): boolean {
-    return this.isSimulated;
-  }
-
-  public setSimulatedMode(simulated: boolean) {
-    this.isSimulated = simulated;
-    localStorage.setItem(STORAGE_KEY_SIMULATED, simulated ? 'true' : 'false');
-    if (simulated && !this.currentUser) {
-      this.setDemoUser();
-    }
-  }
-
   public setSession(token: string, refreshToken?: string) {
     this.token = token;
     localStorage.setItem(STORAGE_KEY_TOKEN, token);
@@ -182,10 +211,11 @@ export class ThingsBoardClientService {
     this.currentUser = null;
     localStorage.removeItem(STORAGE_KEY_TOKEN);
     localStorage.removeItem(STORAGE_KEY_REFRESH);
+    localStorage.removeItem(STORAGE_KEY_USER);
   }
 
   public async logout(): Promise<void> {
-    if (!this.isSimulated && this.token) {
+    if (this.token) {
       try {
         await apiLogout();
       } catch (err) {
@@ -197,32 +227,32 @@ export class ThingsBoardClientService {
 
   /**
    * Fetch available OAuth2 / Authentik SSO clients configured on ThingsBoard
+   * Ensures absolute URLs targeting ThingsBoard backend (app.humid1.com)
    */
   public async getAvailableOAuth2Clients(): Promise<OAuth2ClientOption[]> {
-    if (this.isSimulated) {
-      return [
-        {
-          name: 'Authentik SSO (Humid1 Identity)',
-          icon: 'authentik',
-          url: `${this.serverUrl}/oauth2/authorization/authentik`,
-        },
-      ];
-    }
-
     try {
       const response = await apiGetOauth2Clients();
       if (response.data && Array.isArray(response.data)) {
-        return response.data.map((clientItem: any) => ({
-          name: clientItem.title || clientItem.name || 'Authentik SSO',
-          icon: clientItem.icon,
-          url: clientItem.url || `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}`,
-        }));
+        return response.data.map((clientItem: any) => {
+          let resolvedUrl = clientItem.url;
+          if (!resolvedUrl) {
+            resolvedUrl = `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}`;
+          } else if (resolvedUrl.startsWith('/')) {
+            resolvedUrl = `${this.serverUrl}${resolvedUrl}`;
+          }
+
+          return {
+            name: clientItem.title || clientItem.name || 'Authentik SSO (Humid1)',
+            icon: clientItem.icon || 'authentik',
+            url: resolvedUrl,
+          };
+        });
       }
     } catch (err) {
-      console.warn('[ThingsBoard SSO] Unable to fetch OAuth2 clients, providing default Authentik option:', err);
+      console.warn('[ThingsBoard SSO] Unable to fetch OAuth2 clients list from server:', err);
     }
 
-    // Default fallback Authentik SSO provider
+    // Default fallback pointing directly to ThingsBoard Authentik authorization endpoint
     return [
       {
         name: 'Authentik SSO (Humid1 Identity)',
@@ -233,30 +263,12 @@ export class ThingsBoardClientService {
   }
 
   /**
-   * Login using ThingsBoard Customer Credentials
+   * Login using ThingsBoard Customer / Admin Credentials
    */
   public async loginWithCredentials(
     username: string,
     password: string
   ): Promise<{ success: boolean; error?: string; user?: AuthentikUser }> {
-    if (this.isSimulated) {
-      this.setSession('simulated-jwt-token-' + Date.now(), 'simulated-refresh-token-' + Date.now());
-      const demoUser: AuthentikUser = {
-        id: 'cust-usr-001',
-        email: username || 'client@humid1.com',
-        firstName: 'Authentik',
-        lastName: 'Customer',
-        name: 'Authentik Client User',
-        authority: 'CUSTOMER_USER',
-        customerId: '784f394c-42b6-435a-983c-b7beff2784f9',
-        tenantId: 'd6b9d880-2a54-11eb-a017-f584e2a87401',
-        createdTime: Date.now() - 30 * 86400 * 1000,
-        isSimulated: true,
-      };
-      this.currentUser = demoUser;
-      return { success: true, user: demoUser };
-    }
-
     try {
       const res = await apiLogin({
         body: {
@@ -270,9 +282,10 @@ export class ThingsBoardClientService {
         const userRes = await this.fetchCurrentUser();
         return { success: true, user: userRes || undefined };
       } else {
+        const errObj = res.error as any;
         return {
           success: false,
-          error: (res.error as any)?.message || 'Authentication failed. Please check credentials.',
+          error: errObj?.message || 'Authentication failed. Please verify credentials.',
         };
       }
     } catch (err: any) {
@@ -284,16 +297,9 @@ export class ThingsBoardClientService {
   }
 
   /**
-   * Fetch current authenticated user profile
+   * Fetch current authenticated user profile from ThingsBoard /api/auth/user
    */
   public async fetchCurrentUser(): Promise<AuthentikUser | null> {
-    if (this.isSimulated) {
-      if (!this.currentUser) {
-        this.setDemoUser();
-      }
-      return this.currentUser;
-    }
-
     if (!this.token) {
       return null;
     }
@@ -315,38 +321,25 @@ export class ThingsBoardClientService {
           isSimulated: false,
         };
         this.currentUser = authUser;
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(authUser));
         return authUser;
       }
     } catch (err) {
       console.warn('[ThingsBoard] Failed to fetch current user profile:', err);
     }
-    return null;
+
+    return this.currentUser;
   }
 
   public getCurrentUser(): AuthentikUser | null {
     return this.currentUser;
   }
 
-  private setDemoUser() {
-    this.currentUser = {
-      id: 'usr-authentik-customer-01',
-      email: 'customer@humid1.internal',
-      firstName: 'Authentik',
-      lastName: 'Registered User',
-      name: 'Customer (Authentik SSO)',
-      authority: 'CUSTOMER_USER',
-      customerId: '32499a20-d785-11ed-a06c-21dd57dd88ca',
-      tenantId: '784f394c-42b6-435a-983c-b7beff2784f9',
-      createdTime: Date.now() - 60 * 86400 * 1000,
-      isSimulated: true,
-    };
-  }
-
   /**
    * Silent Token Refresh
    */
   public async trySilentTokenRefresh(): Promise<boolean> {
-    if (!this.refreshToken || this.isSimulated) return false;
+    if (!this.refreshToken) return false;
 
     try {
       const res = await apiRefreshToken({
@@ -360,14 +353,13 @@ export class ThingsBoardClientService {
         return true;
       }
     } catch (err) {
-      console.warn('[ThingsBoard] Silent token refresh failed, logging out:', err);
-      this.clearSession();
+      console.warn('[ThingsBoard] Silent token refresh failed:', err);
     }
     return false;
   }
 
   /**
-   * Device Claiming via ThingsBoard API: POST /api/customer/device/{deviceName}/claim
+   * Device Claiming via Real ThingsBoard API: POST /api/customer/device/{deviceName}/claim
    */
   public async claimDevice(
     deviceName: string,
@@ -386,24 +378,8 @@ export class ThingsBoardClientService {
       deviceName: trimmedName,
       secretKey: trimmedKey ? '••••••' : '(None)',
       status: 'PENDING',
-      message: 'Submitting claim request to ThingsBoard /api/customer/device/{deviceName}/claim',
+      message: `Dispatching claim request to ${this.serverUrl}/api/customer/device/${encodeURIComponent(trimmedName)}/claim`,
     };
-
-    if (this.isSimulated) {
-      const mockDevice = this.createMockClaimedDevice(trimmedName);
-      logEntry.status = 'SUCCESS';
-      logEntry.httpStatus = 200;
-      logEntry.message = `Successfully claimed device "${trimmedName}" in Simulated/Demo Mode.`;
-      logEntry.responsePayload = {
-        result: 'SUCCESS',
-        deviceName: trimmedName,
-        deviceId: mockDevice.id,
-        customerId: this.currentUser?.customerId || 'demo-customer-id',
-        claimedTime: Date.now(),
-      };
-      this.addClaimLog(logEntry);
-      return { success: true, rawResponse: logEntry.responsePayload, device: mockDevice };
-    }
 
     try {
       const claimData: ClaimDeviceData = {
@@ -416,9 +392,13 @@ export class ThingsBoardClientService {
       const res = await apiClaimDevice(claimData);
 
       if (res.error) {
-        const errorMsg = (res.error as any)?.message || 'ThingsBoard claim error: Claiming denied or device not found.';
+        const errorObj = res.error as any;
+        const errorMsg =
+          errorObj?.message ||
+          errorObj?.error ||
+          'Claiming rejected: Device not found or claiming not permitted on this unit.';
         logEntry.status = 'ERROR';
-        logEntry.httpStatus = (res.error as any)?.status || 400;
+        logEntry.httpStatus = errorObj?.status || 400;
         logEntry.message = errorMsg;
         logEntry.responsePayload = res.error;
         this.addClaimLog(logEntry);
@@ -427,12 +407,23 @@ export class ThingsBoardClientService {
 
       logEntry.status = 'SUCCESS';
       logEntry.httpStatus = 200;
-      logEntry.message = `Successfully claimed device "${trimmedName}" under customer ${this.currentUser?.customerId || 'account'}.`;
+      logEntry.message = `Device "${trimmedName}" claimed successfully under customer ${this.currentUser?.customerId || 'account'}.`;
       logEntry.responsePayload = res.data;
       this.addClaimLog(logEntry);
 
-      const claimedDev = this.createMockClaimedDevice(trimmedName);
-      return { success: true, rawResponse: res.data, device: claimedDev };
+      notificationService.notifyDeviceClaimed(trimmedName);
+
+      // Fetch fresh device data from ThingsBoard
+      const refreshedDevices = await this.fetchCustomerDevices();
+      const claimedDev = refreshedDevices.find(
+        (d) => d.clientAttributes.device_name?.toLowerCase() === trimmedName.toLowerCase() || d.name?.toLowerCase() === trimmedName.toLowerCase()
+      );
+
+      return {
+        success: true,
+        rawResponse: res.data,
+        device: claimedDev || (refreshedDevices.length > 0 ? refreshedDevices[0] : undefined),
+      };
     } catch (err: any) {
       const errMsg = err?.message || 'Network error claiming device.';
       logEntry.status = 'ERROR';
@@ -448,19 +439,6 @@ export class ThingsBoardClientService {
    * Reclaim / Release Device: DELETE /api/customer/device/{deviceName}/claim
    */
   public async reclaimDevice(deviceName: string): Promise<{ success: boolean; error?: string }> {
-    if (this.isSimulated) {
-      this.addClaimLog({
-        id: 'log-' + Date.now(),
-        timestamp: Date.now(),
-        deviceName,
-        secretKey: 'N/A',
-        status: 'SUCCESS',
-        httpStatus: 200,
-        message: `Device "${deviceName}" reclaimed and released from customer.`,
-      });
-      return { success: true };
-    }
-
     try {
       const res = await apiReClaimDevice({
         path: {
@@ -469,8 +447,20 @@ export class ThingsBoardClientService {
       });
 
       if (res.error) {
-        return { success: false, error: (res.error as any)?.message || 'Failed to reclaim device' };
+        const errObj = res.error as any;
+        return { success: false, error: errObj?.message || 'Failed to reclaim device' };
       }
+
+      this.addClaimLog({
+        id: 'log-' + Date.now(),
+        timestamp: Date.now(),
+        deviceName,
+        secretKey: 'N/A',
+        status: 'SUCCESS',
+        httpStatus: 200,
+        message: `Device "${deviceName}" unassigned and released back to open pool.`,
+      });
+
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Error reclaiming device' };
@@ -478,68 +468,315 @@ export class ThingsBoardClientService {
   }
 
   /**
-   * Get Customer Devices via ThingsBoard API
+   * Fetch Real Devices from ThingsBoard
+   * Returns empty array if no hardware is assigned or claimed yet.
    */
   public async fetchCustomerDevices(): Promise<HumidorDevice[]> {
-    if (this.isSimulated || !this.token) {
-      return INITIAL_DEVICES;
+    if (!this.token) {
+      return [];
     }
 
     try {
+      let rawDeviceList: any[] = [];
       const customerId = this.currentUser?.customerId;
-      if (!customerId) {
-        return INITIAL_DEVICES;
+
+      // Try customer devices if customerId exists
+      if (customerId && customerId !== 'undefined') {
+        const custRes = await apiGetCustomerDeviceInfos({
+          path: { customerId },
+          query: { pageSize: 100, page: 0 },
+        });
+        if (custRes.data && Array.isArray((custRes.data as any).data)) {
+          rawDeviceList = (custRes.data as any).data;
+        }
       }
 
-      const res = await apiGetCustomerDeviceInfos({
-        path: { customerId },
-        query: { pageSize: 50, page: 0 },
+      // If tenant admin or no devices found under customerId, try tenant device infos
+      if (rawDeviceList.length === 0) {
+        try {
+          const tenantRes = await apiGetTenantDeviceInfos({
+            query: { pageSize: 100, page: 0 },
+          });
+          if (tenantRes.data && Array.isArray((tenantRes.data as any).data)) {
+            rawDeviceList = (tenantRes.data as any).data;
+          }
+        } catch {
+          // May fail if user is purely a customer user without tenant admin scope
+        }
+      }
+
+      if (rawDeviceList.length === 0) {
+        return [];
+      }
+
+      // Enrich each device with real telemetry and attributes from ThingsBoard
+      const enrichedDevices = await Promise.all(
+        rawDeviceList.map(async (d: any) => {
+          const deviceId = d.id?.id;
+          const deviceName = d.name || 'HUMID1-DEVICE';
+          const label = d.label || deviceName;
+
+          // Fetch Latest Timeseries
+          let telemetryRh = 68.0;
+          let telemetryTemp = 70.0;
+          let telemetryBattery = 100;
+          let telemetryRssi = -60;
+          let lastSeenTs = d.createdTime || Date.now();
+
+          try {
+            const tsRes = await apiGetLatestTimeseries({
+              path: {
+                entityType: 'DEVICE',
+                entityId: deviceId,
+              },
+            });
+
+            if (tsRes.data) {
+              const tsData = tsRes.data as Record<string, Array<{ ts: number; value: any }>>;
+              if (tsData.rh?.[0]?.value !== undefined) {
+                telemetryRh = parseFloat(tsData.rh[0].value);
+                lastSeenTs = Math.max(lastSeenTs, tsData.rh[0].ts);
+              } else if (tsData.humidity?.[0]?.value !== undefined) {
+                telemetryRh = parseFloat(tsData.humidity[0].value);
+                lastSeenTs = Math.max(lastSeenTs, tsData.humidity[0].ts);
+              }
+
+              if (tsData.temp?.[0]?.value !== undefined) {
+                telemetryTemp = parseFloat(tsData.temp[0].value);
+                lastSeenTs = Math.max(lastSeenTs, tsData.temp[0].ts);
+              } else if (tsData.temperature?.[0]?.value !== undefined) {
+                telemetryTemp = parseFloat(tsData.temperature[0].value);
+                lastSeenTs = Math.max(lastSeenTs, tsData.temperature[0].ts);
+              }
+
+              if (tsData.battery?.[0]?.value !== undefined) {
+                telemetryBattery = parseInt(tsData.battery[0].value, 10);
+                lastSeenTs = Math.max(lastSeenTs, tsData.battery[0].ts);
+              }
+
+              if (tsData.rssi?.[0]?.value !== undefined) {
+                telemetryRssi = parseInt(tsData.rssi[0].value, 10);
+              }
+            }
+          } catch {
+            // Devices without telemetry yet
+          }
+
+          // Fetch Client Attributes
+          let fwVersion = 'v1.0.4';
+          let macAddress = '24:6F:28:XX:XX:XX';
+          let ssid = 'Wi-Fi Network';
+          let ipAddress = '192.168.1.100';
+          let hasSdCard = true;
+          let audioSynced = true;
+
+          try {
+            const clientAttrRes = await apiGetAttributesByScope({
+              path: {
+                entityType: 'DEVICE',
+                entityId: deviceId,
+                scope: 'CLIENT_SCOPE',
+              },
+            });
+
+            if (clientAttrRes.data && Array.isArray(clientAttrRes.data)) {
+              for (const attr of clientAttrRes.data as Array<{ key: string; value: any }>) {
+                if (attr.key === 'fw_version') fwVersion = String(attr.value);
+                if (attr.key === 'mac_address') macAddress = String(attr.value);
+                if (attr.key === 'ssid') ssid = String(attr.value);
+                if (attr.key === 'ip_address') ipAddress = String(attr.value);
+                if (attr.key === 'has_sd_card') hasSdCard = Boolean(attr.value);
+                if (attr.key === 'audio_synced') audioSynced = Boolean(attr.value);
+              }
+            }
+          } catch {
+            // Attributes fallback
+          }
+
+          // Fetch Shared Attributes
+          let sleepInterval = 900;
+          let deviceTheme: 'DARK' | 'LIGHT' | 'STEALTH' = 'DARK';
+          let soundEnabled = true;
+          let autoUpdateEnabled = true;
+          let manualOtaTrigger = false;
+
+          try {
+            const sharedAttrRes = await apiGetAttributesByScope({
+              path: {
+                entityType: 'DEVICE',
+                entityId: deviceId,
+                scope: 'SHARED_SCOPE',
+              },
+            });
+
+            if (sharedAttrRes.data && Array.isArray(sharedAttrRes.data)) {
+              for (const attr of sharedAttrRes.data as Array<{ key: string; value: any }>) {
+                if (attr.key === 'sleep_interval_sec') sleepInterval = Number(attr.value);
+                if (attr.key === 'device_theme') deviceTheme = attr.value;
+                if (attr.key === 'sound_enabled') soundEnabled = Boolean(attr.value);
+                if (attr.key === 'auto_update_enabled') autoUpdateEnabled = Boolean(attr.value);
+                if (attr.key === 'manual_ota_trigger') manualOtaTrigger = Boolean(attr.value);
+              }
+            }
+          } catch {
+            // Shared attributes fallback
+          }
+
+          // Generate initial timeline point from current telemetry
+          const now = Date.now();
+          const isRecent = now - lastSeenTs < 15 * 60 * 1000;
+          const status = isRecent ? 'ONLINE' : ('OFFLINE' as const);
+
+          const initialPoint: TimeSeriesPoint = {
+            timestamp: lastSeenTs,
+            timeFormatted: new Date(lastSeenTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            dateFormatted: new Date(lastSeenTs).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+            rh: telemetryRh,
+            temp: telemetryTemp,
+            tempC: Number((((telemetryTemp - 32) * 5) / 9).toFixed(1)),
+            battery: telemetryBattery,
+            rssi: telemetryRssi,
+          };
+
+          const device: HumidorDevice = {
+            id: deviceId,
+            name: label,
+            status,
+            lastSeen: lastSeenTs,
+            telemetry: {
+              rh: telemetryRh,
+              temp: telemetryTemp,
+              battery: telemetryBattery,
+              rssi: telemetryRssi,
+              timestamp: lastSeenTs,
+            },
+            clientAttributes: {
+              fw_version: fwVersion,
+              device_name: deviceName,
+              mac_address: macAddress,
+              ssid,
+              ip_address: ipAddress,
+              has_sd_card: hasSdCard,
+              audio_synced: audioSynced,
+            },
+            sharedAttributes: {
+              sleep_interval_sec: sleepInterval,
+              device_theme: deviceTheme,
+              sound_enabled: soundEnabled,
+              auto_update_enabled: autoUpdateEnabled,
+              manual_ota_trigger: manualOtaTrigger,
+            },
+            ota: {
+              fw_state: 'IDLE',
+              fw_progress: 0,
+              target_version: 'v1.2.0',
+            },
+            history: [initialPoint],
+          };
+
+          return device;
+        })
+      );
+
+      return enrichedDevices;
+    } catch (err) {
+      console.warn('[ThingsBoard] Unable to fetch devices from server:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch Alarms from ThingsBoard
+   */
+  public async fetchAlarms(): Promise<HumidorAlarm[]> {
+    if (!this.token) return [];
+
+    try {
+      const res = await apiGetAllAlarmsV2({
+        query: {
+          pageSize: 50,
+          page: 0,
+          sortProperty: 'createdTime',
+          sortOrder: 'DESC',
+        },
       });
 
       if (res.data && Array.isArray((res.data as any).data)) {
-        const tbDevices = (res.data as any).data;
-        if (tbDevices.length === 0) return INITIAL_DEVICES;
+        const tbAlarms = (res.data as any).data;
+        return tbAlarms.map((a: any) => {
+          let severity: 'CRITICAL' | 'MAJOR' | 'WARNING' = 'WARNING';
+          if (a.severity === 'CRITICAL') severity = 'CRITICAL';
+          else if (a.severity === 'MAJOR') severity = 'MAJOR';
 
-        return tbDevices.map((d: any, idx: number) => ({
-          id: d.id?.id || `tb-dev-${idx}`,
-          name: d.label || d.name,
-          status: 'ONLINE' as const,
-          lastSeen: d.createdTime || Date.now(),
-          telemetry: {
-            rh: 68.0 + (idx % 3),
-            temp: 70.0 - (idx % 2),
-            battery: 90 - idx * 5,
-            rssi: -55 - idx * 6,
-            timestamp: Date.now(),
-          },
-          clientAttributes: {
-            fw_version: 'v1.0.4',
-            device_name: d.name,
-            mac_address: `24:6F:28:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}`,
-            ssid: 'Humidor_Vault_5G',
-            ip_address: `192.168.1.${140 + idx}`,
-            has_sd_card: true,
-            audio_synced: true,
-          },
-          sharedAttributes: {
-            sleep_interval_sec: 900,
-            device_theme: 'DARK' as const,
-            sound_enabled: true,
-            auto_update_enabled: true,
-            manual_ota_trigger: false,
-          },
-          ota: {
-            fw_state: 'IDLE' as const,
-            fw_progress: 0,
-            target_version: 'v1.2.0',
-          },
-          history: generateHistory(68.0 + (idx % 3), 70.0 - (idx % 2), 90 - idx * 5, 7, 30),
-        }));
+          return {
+            id: a.id?.id || String(a.createdTime),
+            deviceId: a.originator?.id || '',
+            deviceName: a.originatorName || 'Humidor Unit',
+            type: a.type || 'Telemetry Out of Bounds',
+            severity,
+            status: a.status || 'ACTIVE_UNACK',
+            message: a.details?.message || `${a.type} triggered on ${a.originatorName || 'device'}`,
+            createdTime: a.createdTime,
+            ackTime: a.ackTs || undefined,
+            clearTime: a.clearTs || undefined,
+            details: a.details,
+          };
+        });
       }
     } catch (err) {
-      console.warn('[ThingsBoard] Unable to fetch devices from server, using local list:', err);
+      console.warn('[ThingsBoard] Unable to fetch alarms from server:', err);
     }
-    return INITIAL_DEVICES;
+    return [];
+  }
+
+  /**
+   * Acknowledge Alarm on ThingsBoard
+   */
+  public async acknowledgeAlarm(alarmId: string): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const res = await apiAckAlarm({
+        path: { alarmId },
+      });
+      return !res.error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Clear Alarm on ThingsBoard
+   */
+  public async clearAlarm(alarmId: string): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const res = await apiClearAlarm({
+        path: { alarmId },
+      });
+      return !res.error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Update Shared Attributes on Device
+   */
+  public async saveSharedAttributes(deviceId: string, attributes: Partial<SharedAttributes>): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const res = await apiSaveDeviceAttributes({
+        path: {
+          deviceId,
+          scope: 'SHARED_SCOPE',
+        },
+        body: JSON.stringify(attributes) as any,
+      });
+      return !res.error;
+    } catch (e) {
+      console.warn('[ThingsBoard] Failed to update shared attributes via API', e);
+      return false;
+    }
   }
 
   public getClaimLogs(): ClaimLogEntry[] {
@@ -558,45 +795,6 @@ export class ThingsBoardClientService {
     } catch {
       // ignore
     }
-  }
-
-  public createMockClaimedDevice(deviceName: string): HumidorDevice {
-    const newId = 'tb-claimed-' + Math.random().toString(36).substring(2, 9);
-    return {
-      id: newId,
-      name: deviceName.replace(/^HUMID1-?/i, '').replace(/-\d+$/, '') || deviceName,
-      status: 'ONLINE',
-      lastSeen: Date.now(),
-      telemetry: {
-        rh: Number((68.5 + (Math.random() - 0.5) * 1.5).toFixed(1)),
-        temp: Number((69.8 + (Math.random() - 0.5) * 1.2).toFixed(1)),
-        battery: 100,
-        rssi: -52,
-        timestamp: Date.now(),
-      },
-      clientAttributes: {
-        fw_version: 'v1.0.4',
-        device_name: deviceName.toUpperCase(),
-        mac_address: `24:6F:28:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}:${Math.floor(Math.random() * 89 + 10)}`,
-        ssid: 'Humidor_Vault_5G',
-        ip_address: `192.168.1.${Math.floor(Math.random() * 80 + 150)}`,
-        has_sd_card: true,
-        audio_synced: true,
-      },
-      sharedAttributes: {
-        sleep_interval_sec: 900,
-        device_theme: 'DARK',
-        sound_enabled: true,
-        auto_update_enabled: true,
-        manual_ota_trigger: false,
-      },
-      ota: {
-        fw_state: 'IDLE',
-        fw_progress: 0,
-        target_version: 'v1.2.0',
-      },
-      history: generateHistory(68.5, 69.8, 100, 7, 30),
-    };
   }
 
   /**

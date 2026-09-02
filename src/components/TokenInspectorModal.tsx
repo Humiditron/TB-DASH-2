@@ -85,7 +85,7 @@ export const TokenInspectorModal: React.FC<TokenInspectorModalProps> = ({
           <div>
             <span className="text-slate-400 text-[10px] block">SESSION TYPE</span>
             <span className="text-emerald-400 font-bold">
-              {currentUser?.isSimulated ? 'Local Demo' : 'Live ThingsBoard JWT'}
+              Live Authenticated ThingsBoard JWT
             </span>
           </div>
         </div>

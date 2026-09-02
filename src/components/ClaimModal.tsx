@@ -8,7 +8,7 @@ interface ClaimModalProps {
 }
 
 export const ClaimModal: React.FC<ClaimModalProps> = ({ isOpen, onClose, onClaim }) => {
-  const [deviceName, setDeviceName] = useState('HUMID1-Vault-01');
+  const [deviceName, setDeviceName] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

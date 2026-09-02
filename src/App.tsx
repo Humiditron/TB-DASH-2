@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   HumidorDevice,
   HumidorAlarm,
@@ -7,8 +7,8 @@ import {
   SharedAttributes,
   AuthentikUser,
 } from './types';
-import { INITIAL_DEVICES, INITIAL_ALARMS } from './services/thingsboard';
 import { tbClient } from './services/tbClient';
+import { notificationService } from './services/notificationService';
 import { NewsTicker } from './components/NewsTicker';
 import { Header } from './components/Header';
 import { DiagnosticsBar } from './components/DiagnosticsBar';
@@ -24,13 +24,14 @@ import { AuthScreen } from './components/AuthScreen';
 import { ClaimingHub } from './components/ClaimingHub';
 import { TokenInspectorModal } from './components/TokenInspectorModal';
 import { EcosystemModal } from './components/EcosystemModal';
+import { ShieldCheck, PlusCircle, Server, Bell, Cpu, RefreshCw, Layers } from 'lucide-react';
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<AuthentikUser | null>(() => tbClient.getCurrentUser());
   const [activeView, setActiveView] = useState<'telemetry' | 'claiming'>('telemetry');
-  const [devices, setDevices] = useState<HumidorDevice[]>(INITIAL_DEVICES);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('tb-dev-001');
-  const [alarms, setAlarms] = useState<HumidorAlarm[]>(INITIAL_ALARMS);
+  const [devices, setDevices] = useState<HumidorDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [alarms, setAlarms] = useState<HumidorAlarm[]>([]);
   const [tempUnit, setTempUnit] = useState<TempUnit>('F');
   const [pushEnabled, setPushEnabled] = useState<boolean>(true);
   const [isClaimModalOpen, setIsClaimModalOpen] = useState<boolean>(false);
@@ -39,115 +40,137 @@ export function App() {
   const [isEcosystemOpen, setIsEcosystemOpen] = useState<boolean>(false);
   const [serverUrl, setServerUrl] = useState<string>(tbClient.getServerUrl());
   const [activeToastAlarm, setActiveToastAlarm] = useState<HumidorAlarm | null>(null);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || devices[0] || INITIAL_DEVICES[0];
+  const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || devices[0];
 
-  // SSO Callback check on mount
+  // Refresh hardware devices and alarms from ThingsBoard
+  const refreshData = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const [fetchedDevices, fetchedAlarms] = await Promise.all([
+        tbClient.fetchCustomerDevices(),
+        tbClient.fetchAlarms(),
+      ]);
+
+      setDevices((prev) => {
+        // Merge historical points with previously loaded history
+        return fetchedDevices.map((newDev) => {
+          const prevDev = prev.find((p) => p.id === newDev.id);
+          if (prevDev && prevDev.history.length > 0) {
+            const lastHist = prevDev.history[prevDev.history.length - 1];
+            if (newDev.telemetry.timestamp > lastHist.timestamp) {
+              const nowPoint = {
+                timestamp: newDev.telemetry.timestamp,
+                timeFormatted: new Date(newDev.telemetry.timestamp).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
+                dateFormatted: new Date(newDev.telemetry.timestamp).toLocaleDateString([], {
+                  month: 'short',
+                  day: 'numeric',
+                }),
+                rh: newDev.telemetry.rh,
+                temp: newDev.telemetry.temp,
+                tempC: Number((((newDev.telemetry.temp - 32) * 5) / 9).toFixed(1)),
+                battery: newDev.telemetry.battery,
+                rssi: newDev.telemetry.rssi,
+              };
+              return {
+                ...newDev,
+                history: [...prevDev.history.slice(-150), nowPoint],
+              };
+            }
+            return {
+              ...newDev,
+              history: prevDev.history,
+            };
+          }
+          return newDev;
+        });
+      });
+
+      if (fetchedDevices.length > 0 && !selectedDeviceId) {
+        setSelectedDeviceId(fetchedDevices[0].id);
+      }
+
+      setAlarms(fetchedAlarms);
+
+      // Check for any active critical alarm that needs notification
+      const criticalAlarm = fetchedAlarms.find((a) => a.severity === 'CRITICAL' && a.status.startsWith('ACTIVE'));
+      if (criticalAlarm) {
+        setActiveToastAlarm(criticalAlarm);
+        notificationService.notifyAlarm(criticalAlarm);
+      }
+    } catch (e) {
+      console.warn('[ThingsBoard Poller] Error fetching live data:', e);
+    }
+  }, [currentUser, selectedDeviceId]);
+
+  // Initial authentication & callback check
   useEffect(() => {
-    const ssoUser = tbClient.checkForSSOCallback();
-    if (ssoUser) {
-      setCurrentUser(ssoUser);
+    const callbackUser = tbClient.checkForSSOCallback();
+    if (callbackUser) {
+      setCurrentUser(callbackUser);
     }
   }, []);
 
-  // Fetch registered devices when user is logged in
+  // Sync data on login & setup regular telemetry polling interval (every 6 seconds)
   useEffect(() => {
     if (currentUser) {
-      tbClient.fetchCustomerDevices().then((fetched) => {
-        if (fetched && fetched.length > 0) {
-          setDevices(fetched);
-          setSelectedDeviceId(fetched[0].id);
-        }
-      });
+      refreshData();
+      const interval = setInterval(() => {
+        refreshData();
+      }, 6000);
+      return () => clearInterval(interval);
     }
-  }, [currentUser]);
+  }, [currentUser, refreshData]);
 
-  // Live telemetry pulse simulation for active humidor units
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDevices((prevDevices) =>
-        prevDevices.map((dev) => {
-          if (dev.status === 'OFFLINE') return dev;
+  // Handle push notification toggle & permission
+  const handleTogglePush = async () => {
+    if (!pushEnabled) {
+      setPushEnabled(true);
+      notificationService.setPushEnabled(true);
+    } else {
+      const status = await notificationService.requestPermission();
+      if (status === 'granted') {
+        notificationService.notifyTest();
+      }
+      setPushEnabled(!pushEnabled);
+      notificationService.setPushEnabled(!pushEnabled);
+    }
+  };
 
-          // Micro variations in temperature & humidity
-          const rhDelta = (Math.random() - 0.5) * 0.15;
-          const tempDelta = (Math.random() - 0.5) * 0.1;
-          const newRh = Number(Math.max(50, Math.min(85, dev.telemetry.rh + rhDelta)).toFixed(1));
-          const newTemp = Number(Math.max(55, Math.min(90, dev.telemetry.temp + tempDelta)).toFixed(1));
-          const newTimestamp = Date.now();
-
-          // Append to history if interval met
-          const lastPoint = dev.history[dev.history.length - 1];
-          let updatedHistory = dev.history;
-          if (!lastPoint || newTimestamp - lastPoint.timestamp > 60 * 1000) {
-            const date = new Date(newTimestamp);
-            const newPoint = {
-              timestamp: newTimestamp,
-              timeFormatted: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              dateFormatted: date.toLocaleDateString([], { month: 'short', day: 'numeric' }),
-              rh: newRh,
-              temp: newTemp,
-              tempC: Number((((newTemp - 32) * 5) / 9).toFixed(1)),
-              battery: dev.telemetry.battery,
-              rssi: dev.telemetry.rssi,
-            };
-            updatedHistory = [...dev.history.slice(-200), newPoint];
-          }
-
-          return {
-            ...dev,
-            lastSeen: newTimestamp,
-            telemetry: {
-              ...dev.telemetry,
-              rh: newRh,
-              temp: newTemp,
-              timestamp: newTimestamp,
-            },
-            history: updatedHistory,
-          };
-        })
-      );
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Update Shared Attributes
-  const handleUpdateSharedAttributes = (
+  // Update Shared Attributes to device
+  const handleUpdateSharedAttributes = async (
     deviceId: string,
     attributes: Partial<SharedAttributes>
   ) => {
     setDevices((prev) =>
-      prev.map((dev) => {
-        if (dev.id === deviceId) {
-          const updatedShared = { ...dev.sharedAttributes, ...attributes };
-          return {
-            ...dev,
-            sharedAttributes: updatedShared,
-          };
-        }
-        return dev;
-      })
+      prev.map((dev) => (dev.id === deviceId ? { ...dev, sharedAttributes: { ...dev.sharedAttributes, ...attributes } } : dev))
     );
+    await tbClient.saveSharedAttributes(deviceId, attributes);
   };
 
-  // Trigger OTA Update with state machine
-  const handleTriggerOta = (deviceId: string) => {
+  // Trigger OTA Update
+  const handleTriggerOta = async (deviceId: string) => {
     setDevices((prev) =>
-      prev.map((dev) => {
-        if (dev.id === deviceId) {
-          return {
-            ...dev,
-            ota: {
-              ...dev.ota,
-              fw_state: 'DOWNLOADING',
-              fw_progress: 15,
-            },
-          };
-        }
-        return dev;
-      })
+      prev.map((dev) =>
+        dev.id === deviceId
+          ? {
+              ...dev,
+              ota: {
+                ...dev.ota,
+                fw_state: 'DOWNLOADING',
+                fw_progress: 15,
+              },
+            }
+          : dev
+      )
     );
+
+    // Save manual OTA trigger attribute to ThingsBoard
+    await tbClient.saveSharedAttributes(deviceId, { manual_ota_trigger: true });
 
     setTimeout(() => {
       setDevices((prev) =>
@@ -163,7 +186,7 @@ export function App() {
       setDevices((prev) =>
         prev.map((dev) =>
           dev.id === deviceId
-            ? { ...dev, ota: { ...dev.ota, fw_state: 'VERIFIED', fw_progress: 80 } }
+            ? { ...dev, ota: { ...dev.ota, fw_state: 'VERIFIED', fw_progress: 85 } }
             : dev
         )
       );
@@ -200,30 +223,34 @@ export function App() {
           return dev;
         })
       );
-    }, 5200);
+    }, 5000);
   };
 
   // Claim Device handler
   const handleClaimDevice = async (deviceName: string, secretKey: string) => {
     const result = await tbClient.claimDevice(deviceName, secretKey);
-    if (result.success && result.device) {
-      const newDev = result.device;
-      setDevices((prev) => {
-        const existingIdx = prev.findIndex((d) => d.id === newDev.id);
-        if (existingIdx >= 0) {
-          const clone = [...prev];
-          clone[existingIdx] = newDev;
-          return clone;
-        }
-        return [...prev, newDev];
-      });
-      setSelectedDeviceId(newDev.id);
+    if (result.success) {
+      if (result.device) {
+        const newDev = result.device;
+        setDevices((prev) => {
+          const existingIdx = prev.findIndex((d) => d.id === newDev.id);
+          if (existingIdx >= 0) {
+            const clone = [...prev];
+            clone[existingIdx] = newDev;
+            return clone;
+          }
+          return [...prev, newDev];
+        });
+        setSelectedDeviceId(newDev.id);
+      } else {
+        await refreshData();
+      }
       return { success: true };
     }
     return { success: false, error: result.error };
   };
 
-  const handleDeviceReclaimed = (deviceId: string, _deviceName: string) => {
+  const handleDeviceReclaimed = (deviceId: string) => {
     setDevices((prev) => {
       const filtered = prev.filter((d) => d.id !== deviceId);
       if (filtered.length > 0 && selectedDeviceId === deviceId) {
@@ -246,13 +273,15 @@ export function App() {
     setSelectedDeviceId(newDev.id);
   };
 
-  const handleLogout = () => {
-    tbClient.clearSession();
+  const handleLogout = async () => {
+    await tbClient.logout();
     setCurrentUser(null);
+    setDevices([]);
+    setAlarms([]);
     setActiveView('telemetry');
   };
 
-  // If user is not authenticated, show the Authentik SSO & Login screen
+  // If user is not authenticated, display Authentik SSO & Login screen
   if (!currentUser) {
     return (
       <AuthScreen
@@ -268,7 +297,7 @@ export function App() {
   const tbConfig: ThingsBoardConfig = {
     serverUrl: serverUrl,
     isConnected: true,
-    isSimulated: currentUser.isSimulated,
+    isSimulated: false,
   };
 
   return (
@@ -294,14 +323,14 @@ export function App() {
         onOpenEcosystemModal={() => setIsEcosystemOpen(true)}
         tbConfig={tbConfig}
         pushEnabled={pushEnabled}
-        onTogglePush={() => setPushEnabled(!pushEnabled)}
+        onTogglePush={handleTogglePush}
         currentUser={currentUser}
         onLogout={handleLogout}
         activeView={activeView}
         onChangeView={setActiveView}
       />
 
-      {/* 3. Main Body */}
+      {/* 3. Main Dashboard Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-6">
         {activeView === 'claiming' ? (
           <ClaimingHub
@@ -317,34 +346,92 @@ export function App() {
           />
         ) : (
           <div className="space-y-6 animate-fade-in">
-            {/* Hardware & Network Diagnostics Bar */}
-            <DiagnosticsBar device={selectedDevice} />
+            {/* If no devices registered under this ThingsBoard account */}
+            {devices.length === 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center shadow-2xl space-y-6 max-w-2xl mx-auto my-8">
+                <div className="inline-flex items-center justify-center p-4 rounded-3xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  <Cpu className="w-10 h-10" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-xl font-bold text-slate-100">No Humidor Hardware Connected</h2>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Your ThingsBoard account is authenticated, but no humidor hardware is currently provisioned.
+                    Claim your physical unit to start logging real-time temperature, humidity, and battery telemetry.
+                  </p>
+                </div>
 
-            {/* Live Climate & Battery Gauges */}
-            <ClimateGauges device={selectedDevice} tempUnit={tempUnit} />
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsClaimModalOpen(true)}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition shadow-lg shadow-amber-900/30 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Claim Your First Device</span>
+                  </button>
 
-            {/* Dual-Axis Synchronized Historical Chart */}
-            <HistoricalChart device={selectedDevice} tempUnit={tempUnit} />
+                  <button
+                    type="button"
+                    onClick={() => setActiveView('claiming')}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    <span>Open Claiming Hub</span>
+                  </button>
 
-            {/* Hardware Control Panel (Sleep Slider, Theme, Audio Lockout, Auto-OTA) */}
-            <ControlPanel
-              device={selectedDevice}
-              onUpdateSharedAttributes={handleUpdateSharedAttributes}
-            />
+                  <button
+                    type="button"
+                    disabled={isSyncing}
+                    onClick={async () => {
+                      setIsSyncing(true);
+                      await refreshData();
+                      setIsSyncing(false);
+                    }}
+                    className="w-full sm:w-auto px-4 py-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>Check Again</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              selectedDevice && (
+                <>
+                  {/* Hardware & Network Diagnostics Bar */}
+                  <DiagnosticsBar device={selectedDevice} />
 
-            {/* Firmware Lifecycle & Manual OTA Center */}
-            <OtaCenter device={selectedDevice} onTriggerOta={handleTriggerOta} />
+                  {/* Live Climate & Battery Gauges */}
+                  <ClimateGauges device={selectedDevice} tempUnit={tempUnit} />
 
-            {/* ThingsBoard Safety Alarms Feed */}
-            <AlarmsFeed
-              alarms={alarms}
-              onAcknowledgeAlarm={(id) =>
-                setAlarms((prev) =>
-                  prev.map((a) => (a.id === id ? { ...a, status: 'ACTIVE_ACK', ackTime: Date.now() } : a))
-                )
-              }
-              onClearAlarm={(id) => setAlarms((prev) => prev.filter((a) => a.id !== id))}
-            />
+                  {/* Dual-Axis Synchronized Historical Chart */}
+                  <HistoricalChart device={selectedDevice} tempUnit={tempUnit} />
+
+                  {/* Hardware Control Panel (Sleep Slider, Theme, Audio Lockout, Auto-OTA) */}
+                  <ControlPanel
+                    device={selectedDevice}
+                    onUpdateSharedAttributes={handleUpdateSharedAttributes}
+                  />
+
+                  {/* Firmware Lifecycle & Manual OTA Center */}
+                  <OtaCenter device={selectedDevice} onTriggerOta={handleTriggerOta} />
+
+                  {/* ThingsBoard Safety Alarms Feed */}
+                  <AlarmsFeed
+                    alarms={alarms}
+                    onAcknowledgeAlarm={async (id) => {
+                      await tbClient.acknowledgeAlarm(id);
+                      setAlarms((prev) =>
+                        prev.map((a) => (a.id === id ? { ...a, status: 'ACTIVE_ACK', ackTime: Date.now() } : a))
+                      );
+                    }}
+                    onClearAlarm={async (id) => {
+                      await tbClient.clearAlarm(id);
+                      setAlarms((prev) => prev.filter((a) => a.id !== id));
+                    }}
+                  />
+                </>
+              )
+            )}
           </div>
         )}
       </main>
@@ -356,9 +443,9 @@ export function App() {
           <div className="flex items-center gap-4 text-slate-400 font-mono text-[11px]">
             <span>Authentik SSO Active</span>
             <span>•</span>
-            <span>Hardware Claiming Enabled</span>
+            <span>Hardware Claiming Ready</span>
             <span>•</span>
-            <span>PWA / Android TWA Compliant</span>
+            <span>Live Telemetry Polling</span>
           </div>
         </div>
       </footer>
