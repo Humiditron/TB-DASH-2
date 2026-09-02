@@ -34,29 +34,14 @@ export default function App() {
   const appDesc = getEnv('VITE_APP_DESCRIPTION', 'Precision Humidor Monitoring & Telemetry Stack');
 
   // Synchronize authenticated OIDC user with ThingsBoard service
-  //useEffect(() => {
-  //  if (auth.isAuthenticated && auth.user) {
-  //    const token = auth.user.access_token || auth.user.id_token || '';
-  //    thingsboard.setAuthSession(token, auth.user.profile);
-  //  } else if (!auth.isLoading && !auth.isAuthenticated) {
-  //    thingsboard.setAuthSession(null);
-  //  }
-  //}, [auth.isAuthenticated, auth.isLoading, auth.user]);
-  
-	useEffect(() => {
-	  if (auth.isAuthenticated && auth.user) {
-		const token = auth.user.access_token || auth.user.id_token || '';
-		
-		// 1. Sync to the first service
-		thingsboard.setAuthSession(token, auth.user.profile);
-		
-		// 2. Sync to the second service (using its setSession method)
-		tbClient.setSession(token, auth.user.refresh_token || null); 
-	  } else if (!auth.isLoading && !auth.isAuthenticated) {
-		thingsboard.setAuthSession(null);
-		tbClient.clearSession(); // Ensure both are cleared on sign-out
-	  }
-	}, [auth.isAuthenticated, auth.isLoading, auth.user]);  
+  useEffect(() => {
+    if (auth.isAuthenticated && auth.user) {
+      const token = auth.user.access_token || auth.user.id_token || '';
+      thingsboard.setAuthSession(token, auth.user.profile);
+    } else if (!auth.isLoading && !auth.isAuthenticated) {
+      thingsboard.setAuthSession(null);
+    }
+  }, [auth.isAuthenticated, auth.isLoading, auth.user]);
 
   useEffect(() => {
     const unsubDevices = thingsboard.subscribe((updatedDevices, updatedAlarms) => {
