@@ -3,4 +3,4 @@ TB Dashboard test #2
 
 # Log
 
-- idk what i did, but i think im back where i left off, ill pick the project up in the morning. (9/3/2026 5:09 AM)
+- I'm not sure what I did, but I think I'm back to where I left off, I'll pick the project up in the morning. (9/3/2026 5:09 AM)
