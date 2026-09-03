@@ -1,25 +1,22 @@
-import { client } from '../client/services.gen';
 import {
-  login as apiLogin,
-  logout as apiLogout,
+  client,
+  login as tbLogin,
+  logout as tbLogout,
   getUser as apiGetUser,
-  refreshToken as apiRefreshToken,
-  getOauth2Clients as apiGetOauth2Clients,
-  claimDevice as apiClaimDevice,
+  getOAuth2Clients as apiGetOauth2Clients,
+  claimDevice1 as apiClaimDevice,
   reClaimDevice as apiReClaimDevice,
   getCustomerDeviceInfos as apiGetCustomerDeviceInfos,
-  getTenantDeviceInfos as apiGetTenantDeviceInfos,
+  getAllDeviceInfos as apiGetAllDeviceInfos,
   getLatestTimeseries as apiGetLatestTimeseries,
   getAttributesByScope as apiGetAttributesByScope,
   saveDeviceAttributes as apiSaveDeviceAttributes,
   getAllAlarmsV2 as apiGetAllAlarmsV2,
   ackAlarm as apiAckAlarm,
   clearAlarm as apiClearAlarm,
-} from '../client/services.gen';
-import type {
-  User,
-  ClaimDeviceData,
-} from '../client/types.gen';
+  type User,
+  type ClaimDeviceData,
+} from '@enerlab/thingsboard-client';
 import {
   AuthentikUser,
   ClaimLogEntry,
@@ -39,6 +36,15 @@ import {
 } from '../config/env';
 import { notificationService } from './notificationService';
 import { apiLogger } from './apiLogger';
+import {
+  normalizeBearerToken,
+  applyThingsBoardClientAuth,
+  extractTokensFromUrl,
+  cleanUrlAfterAuth,
+  decodeJwtPayload as utilDecodeJwtPayload,
+  performSilentTokenRefresh,
+} from '../utils/authTokens';
+import { registerGlobalClientInterceptors } from './apiClientInit';
 
 const STORAGE_KEY_TOKEN = 'humid1_tb_jwt_token';
 const STORAGE_KEY_REFRESH = 'humid1_tb_jwt_refresh';
@@ -59,8 +65,22 @@ export class ThingsBoardClientService {
       APP_CONFIG.domains.thingsboardUrl ||
       'https://app.humid1.com';
 
-    this.token = localStorage.getItem(STORAGE_KEY_TOKEN) || null;
-    this.refreshToken = localStorage.getItem(STORAGE_KEY_REFRESH) || null;
+    // 1. First check URL for tokens passed during SSO / OAuth2 redirect
+    const urlTokens = extractTokensFromUrl();
+    if (urlTokens.token) {
+      this.token = urlTokens.token;
+      this.refreshToken = urlTokens.refreshToken;
+      cleanUrlAfterAuth();
+    } else {
+      this.token =
+        normalizeBearerToken(localStorage.getItem(STORAGE_KEY_TOKEN)) ||
+        normalizeBearerToken(localStorage.getItem('humid1_active_jwt')) ||
+        null;
+      this.refreshToken =
+        normalizeBearerToken(localStorage.getItem(STORAGE_KEY_REFRESH)) ||
+        normalizeBearerToken(localStorage.getItem('humid1_active_refresh_token')) ||
+        null;
+    }
 
     try {
       const storedUser = localStorage.getItem(STORAGE_KEY_USER);
@@ -80,104 +100,37 @@ export class ThingsBoardClientService {
       this.claimLogs = [];
     }
 
+    // Register centralized global request/response interceptors (guarded against duplicates)
+    registerGlobalClientInterceptors({
+      getToken: () => this.token,
+      getRefreshToken: () => this.refreshToken,
+      getServerUrl: () => this.serverUrl,
+      onTokenRefreshed: (newToken, newRefreshToken) => {
+        this.setSession(newToken, newRefreshToken);
+      },
+    });
+
     this.initClientConfig();
     this.checkForSSOCallback();
   }
 
   private initClientConfig() {
-    client.setConfig({
-      baseUrl: this.serverUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-    });
-
-    // Request interceptor to attach JWT Token & log transaction
-    client.interceptors.request.use((request, options) => {
-      if (this.token) {
-        request.headers.set('X-Authorization', `Bearer ${this.token}`);
-        request.headers.set('Authorization', `Bearer ${this.token}`);
-      }
-      const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
-      (request as any).__txId = txId;
-
-      let parsedBody: any = options?.body;
-      if (!parsedBody && request.body) {
-        try {
-          parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
-        } catch {
-          parsedBody = request.body;
-        }
-      }
-
-      apiLogger.logRequest(txId, request.method || 'GET', request.url || '', parsedBody);
-      return request;
-    });
-
-    // Response interceptor for automatic silent token refresh & log response
-    client.interceptors.response.use(async (response, request) => {
-      const txId = (request as any)?.__txId;
-      let responseBody: any = undefined;
-      try {
-        const clone = response.clone();
-        const text = await clone.text();
-        try {
-          responseBody = JSON.parse(text);
-        } catch {
-          responseBody = text;
-        }
-      } catch {
-        responseBody = response.body;
-      }
-
-      if (txId) {
-        apiLogger.logResponse(txId, response.status, responseBody);
-      }
-
-      if (response.status === 401 && this.refreshToken) {
-        await this.trySilentTokenRefresh();
-      }
-      return response;
-    });
+    applyThingsBoardClientAuth(client, this.token, this.serverUrl);
   }
 
   /**
    * Check for SSO Redirect callback parameters in URL query or hash
-   * Supports Authentik SSO (web-dash) and ThingsBoard OAuth2 tokens
+   * Supports Authentik SSO and ThingsBoard OAuth2 tokens
    */
   public checkForSSOCallback(): AuthentikUser | null {
     if (typeof window === 'undefined') return null;
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-
-    const token =
-      urlParams.get('token') ||
-      urlParams.get('accessToken') ||
-      urlParams.get('jwtToken') ||
-      urlParams.get('access_token') ||
-      urlParams.get('id_token') ||
-      urlParams.get('auth_token') ||
-      urlParams.get('bearer_token') ||
-      hashParams.get('token') ||
-      hashParams.get('accessToken') ||
-      hashParams.get('access_token') ||
-      hashParams.get('id_token');
-
-    const refreshToken =
-      urlParams.get('refreshToken') ||
-      urlParams.get('refresh_token') ||
-      hashParams.get('refreshToken') ||
-      hashParams.get('refresh_token');
+    const { token, refreshToken } = extractTokensFromUrl();
 
     if (token) {
-      console.info('[Authentik SSO] Detected token in URL parameters, establishing session...');
+      console.info('[ThingsBoard SSO] Detected token in URL parameters, establishing session...');
       this.setSession(token, refreshToken || undefined);
-
-      // Clean up URL query and hash parameters cleanly while preserving path
-      const cleanUrl = window.location.origin + window.location.pathname;
-      window.history.replaceState({}, document.title, cleanUrl);
+      cleanUrlAfterAuth();
 
       const decoded = this.decodeJwtPayload(token);
       const email =
@@ -209,7 +162,6 @@ export class ThingsBoardClientService {
       this.currentUser = user;
       localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
 
-      // Asynchronously fetch complete user profile from server if valid ThingsBoard JWT
       this.fetchCurrentUser().catch(() => {});
       return user;
     }
@@ -236,13 +188,48 @@ export class ThingsBoardClientService {
   }
 
   public setSession(token: string, refreshToken?: string) {
-    this.token = token;
-    localStorage.setItem(STORAGE_KEY_TOKEN, token);
-    if (refreshToken) {
-      this.refreshToken = refreshToken;
-      localStorage.setItem(STORAGE_KEY_REFRESH, refreshToken);
+    const cleanToken = normalizeBearerToken(token);
+    const cleanRefresh = normalizeBearerToken(refreshToken);
+
+    if (!cleanToken) {
+      this.clearSession();
+      return;
     }
+
+    this.token = cleanToken;
+    localStorage.setItem(STORAGE_KEY_TOKEN, cleanToken);
+    localStorage.setItem('humid1_active_jwt', cleanToken);
+    localStorage.setItem('tb_token', cleanToken);
+
+    if (cleanRefresh) {
+      this.refreshToken = cleanRefresh;
+      localStorage.setItem(STORAGE_KEY_REFRESH, cleanRefresh);
+      localStorage.setItem('humid1_active_refresh_token', cleanRefresh);
+    }
+
     this.initClientConfig();
+
+    // Auto-decode profile
+    const decoded = this.decodeJwtPayload(cleanToken);
+    if (decoded) {
+      const email =
+        (decoded?.email as string) ||
+        (decoded?.preferred_username as string) ||
+        (decoded?.sub as string) ||
+        'user@humid1.com';
+      this.currentUser = {
+        id: (decoded?.userId as string) || (decoded?.sub as string) || 'tb-user',
+        email,
+        firstName: (decoded?.given_name as string) || (decoded?.firstName as string) || '',
+        lastName: (decoded?.family_name as string) || (decoded?.lastName as string) || '',
+        name: (decoded?.name as string) || email,
+        authority: (decoded?.scopes as any)?.[0] || (decoded?.role as string) || 'CUSTOMER_USER',
+        customerId: (decoded?.customerId as string) || undefined,
+        tenantId: (decoded?.tenantId as string) || undefined,
+        isSimulated: false,
+      };
+      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(this.currentUser));
+    }
   }
 
   public clearSession() {
@@ -252,12 +239,16 @@ export class ThingsBoardClientService {
     localStorage.removeItem(STORAGE_KEY_TOKEN);
     localStorage.removeItem(STORAGE_KEY_REFRESH);
     localStorage.removeItem(STORAGE_KEY_USER);
+    localStorage.removeItem('humid1_active_jwt');
+    localStorage.removeItem('humid1_active_refresh_token');
+    localStorage.removeItem('tb_token');
+    applyThingsBoardClientAuth(client, null);
   }
 
   public async logout(): Promise<void> {
     if (this.token) {
       try {
-        await apiLogout();
+        tbLogout({ client: client as any });
       } catch (err) {
         console.warn('[ThingsBoard] Logout API error:', err);
       }
@@ -282,25 +273,25 @@ export class ThingsBoardClientService {
         const tbClients = response.data.map((clientItem: any) => {
           let resolvedUrl = clientItem.url;
           if (!resolvedUrl) {
-            resolvedUrl = `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
+            resolvedUrl = `${this.serverUrl}/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           } else if (resolvedUrl.startsWith('/')) {
             resolvedUrl = `${this.serverUrl}${resolvedUrl}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           }
 
           return {
-            name: clientItem.title || clientItem.name || 'ThingsBoard OAuth2 Gateway',
+            name: clientItem.title || clientItem.name || 'Humid1 SSO (ThingsBoard)',
             icon: clientItem.icon || 'authentik',
             url: resolvedUrl,
           };
         });
 
         return [
+          ...tbClients,
           {
-            name: `Authentik SSO (${slug})`,
+            name: `Direct Authentik SSO (${slug})`,
             icon: 'authentik',
             url: directAuthentikUrl,
           },
-          ...tbClients,
         ];
       }
     } catch (err) {
@@ -309,14 +300,14 @@ export class ThingsBoardClientService {
 
     return [
       {
-        name: `Authentik SSO (${slug})`,
-        icon: 'authentik',
-        url: directAuthentikUrl,
-      },
-      {
-        name: 'ThingsBoard OAuth2 Gateway',
+        name: 'Humid1 SSO (ThingsBoard OAuth2)',
         icon: 'authentik',
         url: thingsBoardOAuthUrl,
+      },
+      {
+        name: `Direct Authentik SSO (${slug})`,
+        icon: 'authentik',
+        url: directAuthentikUrl,
       },
     ];
   }
@@ -329,22 +320,16 @@ export class ThingsBoardClientService {
     password: string
   ): Promise<{ success: boolean; error?: string; user?: AuthentikUser }> {
     try {
-      const res = await apiLogin({
-        body: {
-          username,
-          password,
-        },
-      });
+      const res = await tbLogin(username, password, { client: client as any });
 
-      if (res.data && res.data.token) {
-        this.setSession(res.data.token, res.data.refreshToken);
+      if (res && res.token) {
+        this.setSession(res.token, res.refreshToken);
         const userRes = await this.fetchCurrentUser();
         return { success: true, user: userRes || undefined };
       } else {
-        const errObj = res.error as any;
         return {
           success: false,
-          error: errObj?.message || 'Authentication failed. Please verify credentials.',
+          error: 'Authentication failed. Please verify credentials.',
         };
       }
     } catch (err: any) {
@@ -401,14 +386,9 @@ export class ThingsBoardClientService {
     if (!this.refreshToken) return false;
 
     try {
-      const res = await apiRefreshToken({
-        body: {
-          refreshToken: this.refreshToken,
-        },
-      });
-
-      if (res.data && res.data.token) {
-        this.setSession(res.data.token, res.data.refreshToken);
+      const refreshed = await performSilentTokenRefresh(this.serverUrl, this.refreshToken);
+      if (refreshed) {
+        this.setSession(refreshed.token, refreshed.refreshToken);
         return true;
       }
     } catch (err) {
@@ -441,14 +421,14 @@ export class ThingsBoardClientService {
     };
 
     try {
-      const claimData: ClaimDeviceData = {
+      const claimData = {
         path: {
           deviceName: trimmedName,
         },
         body: trimmedKey ? { secretKey: trimmedKey } : undefined,
       };
 
-      const res = await apiClaimDevice(claimData);
+      const res = await apiClaimDevice(claimData as any);
 
       if (res.error) {
         const errorObj = res.error as any;
@@ -550,10 +530,10 @@ export class ThingsBoardClientService {
         }
       }
 
-      // If tenant admin or no devices found under customerId, try tenant device infos
+      // If tenant admin or no devices found under customerId, try all device infos
       if (rawDeviceList.length === 0) {
         try {
-          const tenantRes = await apiGetTenantDeviceInfos({
+          const tenantRes = await apiGetAllDeviceInfos({
             query: { pageSize: 100, page: 0 },
           });
           if (tenantRes.data && Array.isArray((tenantRes.data as any).data)) {
@@ -588,7 +568,7 @@ export class ThingsBoardClientService {
                 entityType: 'DEVICE',
                 entityId: deviceId,
               },
-            });
+            } as any);
 
             if (tsRes.data) {
               const tsData = tsRes.data as Record<string, Array<{ ts: number; value: any }>>;
@@ -636,7 +616,7 @@ export class ThingsBoardClientService {
                 entityId: deviceId,
                 scope: 'CLIENT_SCOPE',
               },
-            });
+            } as any);
 
             if (clientAttrRes.data && Array.isArray(clientAttrRes.data)) {
               for (const attr of clientAttrRes.data as Array<{ key: string; value: any }>) {
@@ -666,7 +646,7 @@ export class ThingsBoardClientService {
                 entityId: deviceId,
                 scope: 'SHARED_SCOPE',
               },
-            });
+            } as any);
 
             if (sharedAttrRes.data && Array.isArray(sharedAttrRes.data)) {
               for (const attr of sharedAttrRes.data as Array<{ key: string; value: any }>) {
@@ -861,21 +841,7 @@ export class ThingsBoardClientService {
    */
   public decodeJwtPayload(tokenStr?: string): Record<string, unknown> | null {
     const target = tokenStr || this.token;
-    if (!target) return null;
-    try {
-      const parts = target.split('.');
-      if (parts.length < 2) return null;
-      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    } catch {
-      return null;
-    }
+    return utilDecodeJwtPayload(target);
   }
 }
 

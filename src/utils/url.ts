@@ -27,6 +27,11 @@ export function normalizeUrl(rawUrl: string | undefined | null): string {
   const trimmed = rawUrl.trim();
   if (!trimmed) return '';
 
+  // Preserve relative paths for reverse proxies (e.g. Caddy, Nginx same-origin bridge)
+  if (trimmed.startsWith('/')) {
+    return trimmed.replace(/\/+$/, '');
+  }
+
   const withProtocol = /^https?:\/\//i.test(trimmed)
     ? trimmed
     : trimmed.startsWith('localhost') || trimmed.startsWith('127.0.0.1')

@@ -13,6 +13,8 @@ import { ClaimDeviceModal } from './components/ClaimDeviceModal';
 import { ServerConfigModal } from './components/ServerConfigModal';
 import { AuthModal } from './components/AuthModal';
 import { ApiInspectorModal } from './components/ApiInspectorModal';
+import { RemoveDeviceModal } from './components/RemoveDeviceModal';
+import { HumidorTelemetryWidget } from './components/HumidorTelemetryWidget';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
 import { Flame, Cpu } from 'lucide-react';
@@ -27,20 +29,25 @@ export default function App() {
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isApiInspectorOpen, setIsApiInspectorOpen] = useState(false);
+  const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
   const appDesc = getEnv('VITE_APP_DESCRIPTION', 'Precision Humidor Monitoring & Telemetry Stack');
 
-  // Synchronize authenticated OIDC user with ThingsBoard service
+  // Synchronize Authentik OIDC profile without overwriting native ThingsBoard session
   useEffect(() => {
-    if (auth.isAuthenticated && auth.user) {
-      const token = auth.user.access_token || auth.user.id_token || '';
-      thingsboard.setAuthSession(token, auth.user.profile);
-    } else if (!auth.isLoading && !auth.isAuthenticated) {
-      thingsboard.setAuthSession(null);
+    if (auth.isAuthenticated && auth.user?.profile) {
+      // Keep UI profile in sync with Authentik user profile
+      const prof = auth.user.profile;
+      setCurrentUser({
+        id: prof.sub || 'oidc-user',
+        name: prof.name || prof.preferred_username || prof.email || 'Humid1 User',
+        email: prof.email || 'user@humid1.com',
+        role: 'Authenticated User',
+      });
     }
-  }, [auth.isAuthenticated, auth.isLoading, auth.user]);
+  }, [auth.isAuthenticated, auth.user]);
 
   useEffect(() => {
     const unsubDevices = thingsboard.subscribe((updatedDevices, updatedAlarms) => {
@@ -115,6 +122,7 @@ export default function App() {
                 device={selectedDevice}
                 allDevices={devices}
                 onSelectDevice={handleSelectDevice}
+                onRemoveDevice={() => setIsRemoveModalOpen(true)}
               />
 
               {/* Climate Gauges Grid (RH%, Temp, Battery, RSSI) */}
@@ -122,6 +130,13 @@ export default function App() {
                 device={selectedDevice}
                 tempUnit={tempUnit}
                 onToggleTempUnit={handleToggleTempUnit}
+              />
+
+              {/* Direct @enerlab/thingsboard-client Telemetry & Session Monitor */}
+              <HumidorTelemetryWidget
+                deviceId={selectedDevice.id}
+                serverUrl={thingsboard.getConfig().serverUrl}
+                deviceName={selectedDevice.name}
               />
 
               {/* Historical Telemetry Chart */}
@@ -190,9 +205,27 @@ export default function App() {
             setSelectedDeviceId(newId);
           }}
         />
-        <ServerConfigModal isOpen={isConfigModalOpen} onClose={() => setIsConfigModalOpen(false)} />
+        <ServerConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          onOpenDiagnostics={() => {
+            setIsConfigModalOpen(false);
+            setIsApiInspectorOpen(true);
+          }}
+        />
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
         <ApiInspectorModal isOpen={isApiInspectorOpen} onClose={() => setIsApiInspectorOpen(false)} />
+        <RemoveDeviceModal
+          isOpen={isRemoveModalOpen}
+          onClose={() => setIsRemoveModalOpen(false)}
+          device={selectedDevice}
+          onDeviceRemoved={(removedId: string) => {
+            const remaining = devices.filter((d) => d.id !== removedId);
+            if (selectedDeviceId === removedId) {
+              setSelectedDeviceId(remaining[0]?.id ?? '');
+            }
+          }}
+        />
       </div>
     </ProtectedRoute>
   );
