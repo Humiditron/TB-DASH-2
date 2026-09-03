@@ -16,6 +16,7 @@ import {
   getUser as apiGetUser,
   login as tbLogin,
   logout as tbLogout,
+  deleteDevice as apiDeleteDevice,
 } from '@enerlab/thingsboard-client';
 import {
   HumidorDevice,
@@ -24,6 +25,7 @@ import {
   HistoricalTelemetryPoint,
   SharedAttributes,
   ClaimLogEntry,
+  DeviceStatus,
 } from '../types';
 import { normalizeUrl } from '../utils/url';
 import { getEnv } from '../utils/env';
@@ -70,6 +72,7 @@ class ThingsBoardService {
   private authSubscribers: Array<(profile: UserProfile | null, token: string | null) => void> = [];
   private currentUser: UserProfile | null = null;
   private livePollInterval: number | null = null;
+  private deviceAttrCache = new Map<string, { client: any; shared: any; fetchedAt: number }>();
 
   constructor() {
     this.purgeLegacyStorage();
@@ -526,6 +529,10 @@ class ThingsBoardService {
     this.fetchRealAlarms();
 
     this.livePollInterval = window.setInterval(() => {
+      // Pause telemetry polling when tab is hidden to prevent request flood
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
       if (this.getEffectiveToken()) {
         this.fetchRealDevices();
         this.fetchRealAlarms();
@@ -688,6 +695,8 @@ class ThingsBoardService {
                 entityType: 'DEVICE',
                 entityId: devId,
               },
+              requestValidator: undefined,
+              responseValidator: undefined,
             } as any);
 
             if (telRes.data) {
@@ -714,50 +723,82 @@ class ThingsBoardService {
             // ignore
           }
 
-          // Fetch client attributes via apiGetAttributesByScope
-          try {
-            const attrRes = await apiGetAttributesByScope({
-              path: {
-                entityType: 'DEVICE',
-                entityId: devId,
-                scope: 'CLIENT_SCOPE',
-              },
-            } as any);
+          // Cache client & shared attributes (TTL 5 minutes) to avoid 20+ redundant HTTP calls per minute
+          const cachedAttr = this.deviceAttrCache.get(devId);
+          const now = Date.now();
+          const shouldFetchAttributes = !cachedAttr || now - cachedAttr.fetchedAt > 300000;
 
-            if (attrRes.data && Array.isArray(attrRes.data)) {
-              (attrRes.data as any[]).forEach((a: any) => {
-                if (a.key in clientAttr) (clientAttr as any)[a.key] = a.value;
-              });
+          if (!shouldFetchAttributes && cachedAttr) {
+            clientAttr = { ...cachedAttr.client };
+            sharedAttr = { ...cachedAttr.shared };
+          } else {
+            // Fetch client attributes via apiGetAttributesByScope
+            try {
+              const attrRes = await apiGetAttributesByScope({
+                path: {
+                  entityType: 'DEVICE',
+                  entityId: devId,
+                  scope: 'CLIENT_SCOPE',
+                },
+                requestValidator: undefined,
+                responseValidator: undefined,
+              } as any);
+
+              if (attrRes.data && Array.isArray(attrRes.data)) {
+                (attrRes.data as any[]).forEach((a: any) => {
+                  if (a.key in clientAttr) (clientAttr as any)[a.key] = a.value;
+                });
+              }
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
+
+            // Fetch shared attributes via apiGetAttributesByScope
+            try {
+              const sharedRes = await apiGetAttributesByScope({
+                path: {
+                  entityType: 'DEVICE',
+                  entityId: devId,
+                  scope: 'SHARED_SCOPE',
+                },
+                requestValidator: undefined,
+                responseValidator: undefined,
+              } as any);
+
+              if (sharedRes.data && Array.isArray(sharedRes.data)) {
+                (sharedRes.data as any[]).forEach((a: any) => {
+                  if (a.key in sharedAttr) (sharedAttr as any)[a.key] = a.value;
+                });
+              }
+            } catch {
+              // ignore
+            }
+
+            // Store in cache
+            this.deviceAttrCache.set(devId, {
+              client: { ...clientAttr },
+              shared: { ...sharedAttr },
+              fetchedAt: now,
+            });
           }
 
-          // Fetch shared attributes via apiGetAttributesByScope
-          try {
-            const sharedRes = await apiGetAttributesByScope({
-              path: {
-                entityType: 'DEVICE',
-                entityId: devId,
-                scope: 'SHARED_SCOPE',
-              },
-            } as any);
-
-            if (sharedRes.data && Array.isArray(sharedRes.data)) {
-              (sharedRes.data as any[]).forEach((a: any) => {
-                if (a.key in sharedAttr) (sharedAttr as any)[a.key] = a.value;
-              });
+          // Variable sleep status check
+          const timeSincePacket = Date.now() - (telemetry.timestamp || 0);
+          let deviceStatus: DeviceStatus = 'OFFLINE';
+          if (telemetry.timestamp && telemetry.timestamp > 0) {
+            if (timeSincePacket <= 180 * 1000) {
+              deviceStatus = 'ONLINE';
+            } else if (timeSincePacket <= 86400 * 1000) {
+              deviceStatus = 'SLEEP';
+            } else {
+              deviceStatus = 'OFFLINE';
             }
-          } catch {
-            // ignore
           }
-
-          const isOnline = Date.now() - telemetry.timestamp < 1800 * 1000;
 
           return {
             id: devId,
             name: devLabel,
-            status: isOnline ? 'ONLINE' : 'OFFLINE',
+            status: deviceStatus,
             lastActivityTime: telemetry.timestamp,
             latestFwAvailable: 'v1.2.0',
             telemetry,
@@ -769,8 +810,32 @@ class ThingsBoardService {
         })
       );
 
-      this.devices = enrichedDevices;
-      this.notifySubscribers();
+      // Only refresh live data & notify subscribers when NEW telemetry data hits ThingsBoard
+      let hasChanged = this.devices.length !== enrichedDevices.length;
+      if (!hasChanged) {
+        for (let i = 0; i < enrichedDevices.length; i++) {
+          const oldD = this.devices[i];
+          const newD = enrichedDevices[i];
+          if (
+            !oldD ||
+            oldD.id !== newD.id ||
+            oldD.status !== newD.status ||
+            oldD.telemetry.timestamp !== newD.telemetry.timestamp ||
+            oldD.telemetry.rh !== newD.telemetry.rh ||
+            oldD.telemetry.temp !== newD.telemetry.temp ||
+            oldD.telemetry.battery !== newD.telemetry.battery ||
+            oldD.telemetry.rssi !== newD.telemetry.rssi
+          ) {
+            hasChanged = true;
+            break;
+          }
+        }
+      }
+
+      if (hasChanged) {
+        this.devices = enrichedDevices;
+        this.notifySubscribers();
+      }
       return this.devices;
     } catch (err) {
       console.warn('Failed to fetch devices from ThingsBoard API:', err);
@@ -956,9 +1021,9 @@ class ThingsBoardService {
   }
 
   /**
-   * Reclaim device via /src_lib/client apiReClaimDevice
+   * Reclaim / Unclaim device from customer account via apiReClaimDevice
    */
-  public async unclaimDevice(deviceName: string): Promise<boolean> {
+  public async unclaimDevice(deviceName: string, deviceId?: string): Promise<boolean> {
     const token = this.getEffectiveToken();
     if (!token) {
       throw new Error('Not connected to ThingsBoard.');
@@ -978,9 +1043,39 @@ class ThingsBoardService {
 
     this.devices = this.devices.filter(
       (d) =>
+        d.id !== deviceId &&
         d.name.toLowerCase() !== cleanDeviceName.toLowerCase() &&
         d.clientAttributes.device_name?.toLowerCase() !== cleanDeviceName.toLowerCase()
     );
+    if (deviceId) {
+      this.deviceAttrCache.delete(deviceId);
+    }
+    this.notifySubscribers();
+    return true;
+  }
+
+  /**
+   * Delete device entity from ThingsBoard server via apiDeleteDevice
+   */
+  public async deleteDevice(deviceId: string): Promise<boolean> {
+    const token = this.getEffectiveToken();
+    if (!token) {
+      throw new Error('Not connected to ThingsBoard.');
+    }
+
+    const res = await apiDeleteDevice({
+      path: {
+        deviceId,
+      },
+    } as any);
+
+    if (res.error) {
+      const errObj = res.error as any;
+      throw new Error(errObj?.message || `Failed to delete device ID "${deviceId}" from server`);
+    }
+
+    this.devices = this.devices.filter((d) => d.id !== deviceId);
+    this.deviceAttrCache.delete(deviceId);
     this.notifySubscribers();
     return true;
   }

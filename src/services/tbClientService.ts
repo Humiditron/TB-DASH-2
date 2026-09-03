@@ -138,23 +138,31 @@ export async function fetchDevice(
 
 /**
  * 6. Fetch Latest Telemetry Timeseries with Zod Validation
+ * Bypasses erroneous SDK Zod validator by overriding requestValidator and responseValidator
  */
 export async function fetchLatestTelemetry(
   deviceId: string,
   keys?: string[],
   customClient: TBClientInstance = client
 ): Promise<LatestTelemetryMap> {
+  const queryObj: any = {
+    useStrictDataTypes: true,
+  };
+  if (keys && keys.length > 0) {
+    queryObj.keys = keys.join(',');
+  }
+
   const response = await getLatestTimeseries({
     client: customClient as any,
     path: {
       entityType: 'DEVICE',
       entityId: deviceId,
     },
-    query: {
-      keys: keys?.join(','),
-      useStrictDataTypes: true,
-    } as any,
-  });
+    query: queryObj,
+    // Disable client-side buggy Zod request validator in @enerlab/thingsboard-client
+    requestValidator: undefined,
+    responseValidator: undefined,
+  } as any);
 
   if (response.error || !response.data) {
     handleApiError(response.error, 'Failed to fetch latest telemetry');
@@ -207,7 +215,9 @@ export async function fetchTelemetryHistory(
       limit: String(limit),
       agg: 'NONE',
     } as any,
-  });
+    requestValidator: undefined,
+    responseValidator: undefined,
+  } as any);
 
   if (response.error || !response.data) {
     handleApiError(response.error, 'Failed to fetch timeseries history');

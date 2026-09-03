@@ -13,6 +13,7 @@ import { ClaimDeviceModal } from './components/ClaimDeviceModal';
 import { ServerConfigModal } from './components/ServerConfigModal';
 import { AuthModal } from './components/AuthModal';
 import { ApiInspectorModal } from './components/ApiInspectorModal';
+import { RemoveDeviceModal } from './components/RemoveDeviceModal';
 import { HumidorTelemetryWidget } from './components/HumidorTelemetryWidget';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
@@ -28,6 +29,7 @@ export default function App() {
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isApiInspectorOpen, setIsApiInspectorOpen] = useState(false);
+  const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
@@ -120,6 +122,7 @@ export default function App() {
                 device={selectedDevice}
                 allDevices={devices}
                 onSelectDevice={handleSelectDevice}
+                onRemoveDevice={() => setIsRemoveModalOpen(true)}
               />
 
               {/* Climate Gauges Grid (RH%, Temp, Battery, RSSI) */}
@@ -212,6 +215,17 @@ export default function App() {
         />
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
         <ApiInspectorModal isOpen={isApiInspectorOpen} onClose={() => setIsApiInspectorOpen(false)} />
+        <RemoveDeviceModal
+          isOpen={isRemoveModalOpen}
+          onClose={() => setIsRemoveModalOpen(false)}
+          device={selectedDevice}
+          onDeviceRemoved={(removedId: string) => {
+            const remaining = devices.filter((d) => d.id !== removedId);
+            if (selectedDeviceId === removedId) {
+              setSelectedDeviceId(remaining[0]?.id ?? '');
+            }
+          }}
+        />
       </div>
     </ProtectedRoute>
   );

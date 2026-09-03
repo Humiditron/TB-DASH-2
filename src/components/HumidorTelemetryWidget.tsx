@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Activity,
   RefreshCw,
@@ -11,6 +11,13 @@ import {
   Server,
   CheckCircle2,
   Cpu,
+  Pause,
+  Play,
+  ChevronDown,
+  ChevronUp,
+  Database,
+  Battery,
+  Layers,
 } from 'lucide-react';
 import { useThingsBoardTelemetry } from '../hooks/useThingsBoardTelemetry';
 import {
@@ -42,7 +49,8 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [useIsolatedClient, setUseIsolatedClient] = useState(false);
+  const [pollIntervalSec, setPollIntervalSec] = useState<number>(10);
+  const [showRawKeys, setShowRawKeys] = useState(false);
 
   // Sync client configuration whenever serverUrl or token changes
   useEffect(() => {
@@ -52,26 +60,44 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
     });
   }, [serverUrl, token]);
 
+  // Query only actual hardware payload keys across firmware variants
+  const requestedKeys = useMemo(
+    () => [
+      'rh',
+      'humidity',
+      'hum',
+      'temp',
+      'temperature',
+      'tempF',
+      'tempC',
+      'rssi',
+      'wifi_rssi',
+      'battery',
+      'batt',
+      'targetHumidity',
+      'target_humidity',
+      'target_rh',
+      'fw_version',
+    ],
+    []
+  );
+
   const {
     device,
     telemetry,
     loading,
     error,
     lastUpdated,
+    lastCheckedTs,
+    isDeviceSleeping,
+    newPacketArrived,
+    isPaused,
+    togglePause,
     refresh,
   } = useThingsBoardTelemetry({
     deviceId,
-    keys: [
-      'temperature',
-      'humidity',
-      'vpd',
-      'rssi',
-      'battery',
-      'targetHumidity',
-      'heaterActive',
-      'fanSpeed',
-    ],
-    pollIntervalMs: 4000,
+    keys: requestedKeys,
+    pollIntervalMs: pollIntervalSec * 1000,
     onUnauthorized: () => {
       setShowLoginModal(true);
     },
@@ -97,6 +123,17 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
     }
   };
 
+  const formatTimeAgo = (ts: number | null) => {
+    if (!ts) return '--';
+    const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (diffSec < 5) return 'just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHours = Math.floor(diffMin / 60);
+    return `${diffHours}h ago`;
+  };
+
   const getMetricValue = (key: string, defaultValue: string = '--') => {
     if (!telemetry[key] || telemetry[key].value === undefined || telemetry[key].value === null) {
       return defaultValue;
@@ -108,11 +145,58 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
     return String(val);
   };
 
-  const tempVal = getMetricValue('temperature');
-  const humVal = getMetricValue('humidity');
-  const vpdVal = telemetry['vpd']?.value !== undefined ? Number(telemetry['vpd'].value).toFixed(2) : '--';
-  const rssiVal = telemetry['rssi']?.value !== undefined ? String(telemetry['rssi'].value) : '-64';
-  const targetHumVal = getMetricValue('targetHumidity', '65');
+  // Robust multi-key lookups for Relative Humidity (rh or humidity or hum)
+  const humVal =
+    getMetricValue('rh') !== '--'
+      ? getMetricValue('rh')
+      : getMetricValue('humidity') !== '--'
+      ? getMetricValue('humidity')
+      : getMetricValue('hum');
+
+  // Robust multi-key lookups for Temperature (temp or temperature or tempF)
+  const tempVal =
+    getMetricValue('temp') !== '--'
+      ? getMetricValue('temp')
+      : getMetricValue('temperature') !== '--'
+      ? getMetricValue('temperature')
+      : getMetricValue('tempF');
+
+  // Target Humidity
+  const targetHumVal =
+    getMetricValue('targetHumidity') !== '--'
+      ? getMetricValue('targetHumidity')
+      : getMetricValue('target_humidity') !== '--'
+      ? getMetricValue('target_humidity')
+      : getMetricValue('target_rh', '65');
+
+  // Battery
+  const batteryVal =
+    getMetricValue('battery') !== '--'
+      ? getMetricValue('battery')
+      : getMetricValue('batt');
+
+  // Signal RSSI
+  const rssiVal =
+    telemetry['rssi']?.value !== undefined
+      ? String(telemetry['rssi'].value)
+      : telemetry['wifi_rssi']?.value !== undefined
+      ? String(telemetry['wifi_rssi'].value)
+      : '-64';
+
+  // VPD calculation only: derived mathematically from ambient temp & RH
+  let vpdVal = '--';
+  if (humVal !== '--' && tempVal !== '--') {
+    const rh = parseFloat(humVal);
+    const tempF = parseFloat(tempVal);
+    if (!isNaN(rh) && !isNaN(tempF)) {
+      const tempC = ((tempF - 32) * 5) / 9;
+      const vpsat = 0.61078 * Math.exp((17.27 * tempC) / (tempC + 237.3));
+      const vpair = vpsat * (rh / 100);
+      vpdVal = Math.max(0, vpsat - vpair).toFixed(2);
+    }
+  }
+
+  const rawKeysCount = Object.keys(telemetry).length;
 
   return (
     <div className="bg-slate-900/95 border border-slate-800/90 rounded-2xl p-5 text-slate-100 shadow-xl relative overflow-hidden">
@@ -138,39 +222,105 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
         </div>
 
         {/* Controls & Sync Status */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Polling Rate Selector */}
+          <div className="flex items-center gap-1 bg-slate-800/80 border border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-400 font-mono">Interval:</span>
+            <select
+              value={pollIntervalSec}
+              onChange={(e) => setPollIntervalSec(Number(e.target.value))}
+              className="bg-transparent text-amber-300 font-semibold text-xs focus:outline-none cursor-pointer"
+            >
+              <option value={10} className="bg-slate-900 text-slate-100">10s (Optimal)</option>
+              <option value={30} className="bg-slate-900 text-slate-100">30s (Relaxed)</option>
+              <option value={60} className="bg-slate-900 text-slate-100">60s (Low Data)</option>
+            </select>
+          </div>
+
+          {/* Pause / Resume Button */}
           <button
+            type="button"
+            onClick={togglePause}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition ${
+              isPaused
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                : 'bg-slate-800/80 border-slate-700/80 text-slate-300 hover:bg-slate-700/80'
+            }`}
+            title={isPaused ? 'Resume live background polling' : 'Pause background polling'}
+          >
+            {isPaused ? (
+              <>
+                <Play className="w-3.5 h-3.5 text-amber-400" />
+                <span>Resume</span>
+              </>
+            ) : (
+              <>
+                <Pause className="w-3.5 h-3.5 text-slate-400" />
+                <span>Pause</span>
+              </>
+            )}
+          </button>
+
+          {/* Force Refresh Button */}
+          <button
+            type="button"
             onClick={() => refresh()}
             disabled={loading}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/80 rounded-lg transition disabled:opacity-50"
-            title="Force refresh live telemetry"
+            title="Force immediate refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-amber-400' : ''}`} />
-            <span>Refresh</span>
+            <span>Sync</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setShowLoginModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg transition"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg transition"
             title="ThingsBoard Session Management"
           >
             <Lock className="w-3.5 h-3.5" />
             <span>Session</span>
           </button>
 
+          {newPacketArrived && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono bg-emerald-500/20 border border-emerald-400 text-emerald-200 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-300" />
+              <span>New Packet!</span>
+            </div>
+          )}
+
           <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-all ${
               error
                 ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                : isPaused
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                : isDeviceSleeping
+                ? 'bg-sky-500/15 border-sky-500/40 text-sky-300'
                 : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
             }`}
           >
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                error ? 'bg-rose-500 animate-pulse' : 'bg-emerald-400'
+                error
+                  ? 'bg-rose-500 animate-pulse'
+                  : isPaused
+                  ? 'bg-amber-400'
+                  : isDeviceSleeping
+                  ? 'bg-sky-400'
+                  : 'bg-emerald-400'
               }`}
             />
-            <span>{error ? 'Degraded' : 'Live Sync'}</span>
+            <span>
+              {error
+                ? 'Degraded'
+                : isPaused
+                ? 'Paused'
+                : isDeviceSleeping
+                ? 'Device Asleep'
+                : 'Live Sync'}
+            </span>
           </div>
         </div>
       </div>
@@ -232,10 +382,10 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
           </div>
         </div>
 
-        {/* Vapor Pressure Deficit */}
+        {/* Vapor Pressure Deficit (Derived mathematically from temp and humidity only) */}
         <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3.5 relative overflow-hidden group hover:border-emerald-500/40 transition">
           <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
-            <span>VPD Curing Index</span>
+            <span>VPD (Calculated)</span>
             <Wind className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="mt-2 flex items-baseline gap-1">
@@ -245,8 +395,8 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
             <span className="text-xs font-mono text-slate-400">kPa</span>
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
-            <span>Leaf Vapor</span>
-            <span className="text-emerald-400 font-mono">Ideal</span>
+            <span>Leaf Vapor Deficit</span>
+            <span className="text-emerald-400 font-mono">Math Derivation</span>
           </div>
         </div>
 
@@ -269,6 +419,80 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
         </div>
       </div>
 
+      {/* Secondary Quick Metrics Row (Battery & Target Humidity) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-2.5 bg-slate-950/40 border border-slate-800/60 rounded-xl text-xs">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-1.5 text-slate-300">
+            <Battery className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-slate-500">Battery:</span>
+            <span className="font-mono font-semibold text-white">
+              {batteryVal !== '--' ? `${batteryVal}%` : 'External USB/5V'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-slate-300">
+            <Droplets className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-slate-500">Target Humidity:</span>
+            <span className="font-mono font-semibold text-white">{targetHumVal}%</span>
+          </div>
+
+          {isDeviceSleeping && (
+            <div className="flex items-center gap-1.5 text-sky-300 font-mono text-[11px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+              <span>Device in Variable Sleep (Awaiting next wakeup)</span>
+            </div>
+          )}
+        </div>
+
+        {/* Expandable Key-Value Inspector Toggle */}
+        <button
+          type="button"
+          onClick={() => setShowRawKeys((prev) => !prev)}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border border-slate-700 transition"
+        >
+          <Database className="w-3 h-3 text-amber-400" />
+          <span>All Received Telemetry Keys ({rawKeysCount})</span>
+          {showRawKeys ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        </button>
+      </div>
+
+      {/* Raw Telemetry Key-Value Accordion Panel */}
+      {showRawKeys && (
+        <div className="mb-4 p-3 bg-slate-950/80 border border-slate-800 rounded-xl animate-fadeIn text-xs">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-[11px] font-mono text-slate-400">
+            <span>KEY NAME</span>
+            <span>LATEST VALUE & TIMESTAMP</span>
+          </div>
+
+          {rawKeysCount === 0 ? (
+            <p className="text-slate-500 font-mono text-center py-2 text-xs">
+              No timeseries keys returned yet from device. Awaiting incoming packet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+              {Object.entries(telemetry).map(([k, entry]) => (
+                <div
+                  key={k}
+                  className="flex items-center justify-between p-2 bg-slate-900/90 border border-slate-800/80 rounded-lg text-[11px] font-mono"
+                >
+                  <span className="text-amber-300/90 font-semibold">{k}</span>
+                  <div className="text-right">
+                    <span className="text-white font-bold block">
+                      {typeof entry?.value === 'object' ? JSON.stringify(entry.value) : String(entry?.value)}
+                    </span>
+                    {entry?.ts && (
+                      <span className="text-[10px] text-slate-500 block">
+                        {new Date(entry.ts).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Footer Info & Architecture Telemetry Badge */}
       <div className="pt-3 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400 font-mono">
         <div className="flex items-center gap-2">
@@ -280,13 +504,25 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
           <span className="text-amber-400/90">{deviceId.substring(0, 13)}...</span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-          <span>
-            {lastUpdated
-              ? `Synced at ${new Date(lastUpdated).toLocaleTimeString()}`
-              : 'Awaiting telemetry...'}
-          </span>
+        <div className="flex flex-wrap items-center gap-4">
+          {lastUpdated && (
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <span className="text-slate-500">Hardware Packet:</span>
+              <span className="text-amber-300 font-bold">
+                {new Date(lastUpdated).toLocaleTimeString()}
+              </span>
+              <span className="text-slate-500">({formatTimeAgo(lastUpdated)})</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5">
+            <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+            <span>
+              {lastCheckedTs
+                ? `TB Polled: ${formatTimeAgo(lastCheckedTs)}`
+                : 'Connecting...'}
+            </span>
+          </div>
         </div>
       </div>
 
