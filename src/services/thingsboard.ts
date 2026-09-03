@@ -112,6 +112,8 @@ class ThingsBoardService {
    * Automatically discovers the active JWT token from OIDC session storage,
    * URL parameters, or environment variables.
    */
+
+  /**
   public findAutomaticJwt(): string | null {
     if (this.authToken && this.authToken.trim()) {
       return this.authToken.trim();
@@ -176,6 +178,113 @@ class ThingsBoardService {
               key.includes('tb_token') ||
               key === 'humid1_active_jwt' ||
               key === 'humid1_tb_jwt_token')
+          ) {
+            const rawVal = window.localStorage.getItem(key);
+            if (rawVal) {
+              try {
+                const parsed = JSON.parse(rawVal);
+                const candidate = parsed.access_token || parsed.id_token || parsed.token;
+                if (candidate && typeof candidate === 'string') {
+                  return candidate.trim();
+                }
+              } catch {
+                if (rawVal.length > 20 && rawVal.includes('.')) {
+                  return rawVal.trim();
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const envToken = getEnv('VITE_THINGSBOARD_TOKEN', '');
+    if (envToken && envToken.trim()) {
+      return envToken.trim();
+    }
+
+    return null;
+  }
+  */
+
+  public findAutomaticJwt(): string | null {
+    if (this.authToken && this.authToken.trim()) {
+      return this.authToken.trim();
+    }
+
+    if (typeof window !== 'undefined') {
+      // 0. Prioritize explicit ThingsBoard tokens first to avoid sending OIDC tokens to TB API
+      try {
+        const directTbToken = 
+          window.localStorage.getItem('humid1_tb_jwt_token') || 
+          window.localStorage.getItem('tb_token') ||
+          window.sessionStorage.getItem('humid1_tb_jwt_token');
+          
+        if (directTbToken && directTbToken.trim() && directTbToken.includes('.')) {
+          return directTbToken.trim();
+        }
+      } catch {
+        // ignore
+      }
+
+      // 1. Scan window.location query & hash for tokens passed during redirect
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const queryToken =
+          urlParams.get('token') ||
+          urlParams.get('accessToken') ||
+          urlParams.get('jwtToken') ||
+          urlParams.get('access_token') ||
+          urlParams.get('jwt') ||
+          urlParams.get('id_token') ||
+          hashParams.get('access_token') ||
+          hashParams.get('id_token') ||
+          hashParams.get('token');
+
+        if (queryToken && queryToken.trim()) {
+          return queryToken.trim();
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Scan sessionStorage for oidc-client user objects
+      try {
+        for (let i = 0; i < window.sessionStorage.length; i++) {
+          const key = window.sessionStorage.key(i);
+          if (key && (key.startsWith('oidc.user:') || key.includes('authentik') || key.includes('thingsboard'))) {
+            const rawVal = window.sessionStorage.getItem(key);
+            if (rawVal) {
+              try {
+                const parsed = JSON.parse(rawVal);
+                const candidate = parsed.access_token || parsed.id_token || parsed.token;
+                if (candidate && typeof candidate === 'string' && candidate.length > 20) {
+                  return candidate.trim();
+                }
+              } catch {
+                if (rawVal.length > 20 && rawVal.includes('.')) {
+                  return rawVal.trim();
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Scan localStorage for remaining stored OIDC sessions or tokens
+      try {
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const key = window.localStorage.key(i);
+          if (
+            key &&
+            (key.startsWith('oidc.user:') ||
+              key.includes('authentik_token') ||
+              key === 'humid1_active_jwt')
           ) {
             const rawVal = window.localStorage.getItem(key);
             if (rawVal) {
