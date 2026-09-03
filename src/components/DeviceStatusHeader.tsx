@@ -10,22 +10,19 @@ import {
   Network, 
   ChevronDown, 
   ShieldCheck, 
-  AlertCircle,
-  Trash2,
+  AlertCircle 
 } from 'lucide-react';
 
 interface DeviceStatusHeaderProps {
   device: HumidorDevice;
   allDevices: HumidorDevice[];
   onSelectDevice: (deviceId: string) => void;
-  onRemoveDevice?: () => void;
 }
 
 export const DeviceStatusHeader: React.FC<DeviceStatusHeaderProps> = ({
   device,
   allDevices,
   onSelectDevice,
-  onRemoveDevice,
 }) => {
   const getRssiVisual = (rssi: number) => {
     let quality = 'Weak';
@@ -150,19 +147,6 @@ export const DeviceStatusHeader: React.FC<DeviceStatusHeaderProps> = ({
             <Music className="w-3.5 h-3.5" />
             <span>{device.clientAttributes.audio_synced ? 'Audio Synced' : 'Audio Pending'}</span>
           </div>
-
-          {/* Remove / Unclaim Device Button */}
-          {onRemoveDevice && (
-            <button
-              type="button"
-              onClick={onRemoveDevice}
-              className="px-3 py-2 rounded-xl text-xs font-medium border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 flex items-center gap-1.5 transition shadow-sm"
-              title="Remove or unclaim this humidor device"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>Remove</span>
-            </button>
-          )}
         </div>
       </div>
 

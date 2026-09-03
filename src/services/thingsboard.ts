@@ -1,12 +1,13 @@
 import {
   client,
-  claimDevice1 as apiClaimDevice,
+  claimDevice as apiClaimDevice,
   reClaimDevice as apiReClaimDevice,
   getCustomerDeviceInfos as apiGetCustomerDeviceInfos,
   getCustomerDevices as apiGetCustomerDevices,
-  getAllDeviceInfos as apiGetAllDeviceInfos,
+  getTenantDeviceInfos as apiGetTenantDeviceInfos,
   getTenantDevices as apiGetTenantDevices,
   getLatestTimeseries as apiGetLatestTimeseries,
+  getTimeseriesHistory as apiGetTimeseriesHistory,
   getAttributesByScope as apiGetAttributesByScope,
   saveDeviceAttributes as apiSaveDeviceAttributes,
   getAllAlarmsV2 as apiGetAllAlarmsV2,
@@ -14,10 +15,9 @@ import {
   ackAlarm as apiAckAlarm,
   clearAlarm as apiClearAlarm,
   getUser as apiGetUser,
-  login as tbLogin,
-  logout as tbLogout,
-  deleteDevice as apiDeleteDevice,
-} from '@enerlab/thingsboard-client';
+  login as apiLogin,
+  logout as apiLogout,
+} from '../client/services.gen';
 import {
   HumidorDevice,
   HumidorAlarm,
@@ -25,22 +25,10 @@ import {
   HistoricalTelemetryPoint,
   SharedAttributes,
   ClaimLogEntry,
-  DeviceStatus,
 } from '../types';
 import { normalizeUrl } from '../utils/url';
 import { getEnv } from '../utils/env';
 import { apiLogger } from './apiLogger';
-import {
-  normalizeBearerToken,
-  applyThingsBoardClientAuth,
-  extractTokensFromUrl,
-  cleanUrlAfterAuth,
-  decodeJwtPayload,
-  performSilentTokenRefresh,
-  isAuthentikOidcToken,
-  isThingsBoardToken,
-} from '../utils/authTokens';
-import { registerGlobalClientInterceptors } from './apiClientInit';
 
 const CONFIG_STORAGE_KEY = 'humid1_thingsboard_config';
 const CLAIM_LOGS_STORAGE_KEY = 'humid1_tb_claim_logs';
@@ -55,8 +43,6 @@ export interface UserProfile {
   email: string;
   firstName?: string;
   lastName?: string;
-  name?: string;
-  role?: string;
   authority?: string;
   customerId?: { id: string } | string;
 }
@@ -64,7 +50,6 @@ export interface UserProfile {
 class ThingsBoardService {
   private config: ThingsBoardConfig;
   private authToken: string | null = null;
-  private refreshToken: string | null = null;
   private devices: HumidorDevice[] = [];
   private alarms: HumidorAlarm[] = [];
   private claimLogs: ClaimLogEntry[] = [];
@@ -72,24 +57,12 @@ class ThingsBoardService {
   private authSubscribers: Array<(profile: UserProfile | null, token: string | null) => void> = [];
   private currentUser: UserProfile | null = null;
   private livePollInterval: number | null = null;
-  private deviceAttrCache = new Map<string, { client: any; shared: any; fetchedAt: number }>();
 
   constructor() {
     this.purgeLegacyStorage();
     this.config = this.loadConfig();
     this.loadClaimLogs();
-
-    // Check URL first for SSO redirects
-    const urlTokens = extractTokensFromUrl();
-    if (urlTokens.token) {
-      this.authToken = urlTokens.token;
-      this.refreshToken = urlTokens.refreshToken;
-      cleanUrlAfterAuth();
-    } else {
-      this.authToken = this.findAutomaticJwt();
-      this.refreshToken = this.getEffectiveRefreshToken();
-    }
-
+    this.authToken = this.findAutomaticJwt();
     if (this.authToken) {
       this.extractProfileFromJwt(this.authToken);
     }
@@ -97,82 +70,146 @@ class ThingsBoardService {
   }
 
   /**
-   * Configure the @enerlab/thingsboard-client instance with centralized interceptors
+   * Configure the @hey-api OpenAPI client instance from /src_lib/client
    */
   private initOpenApiClient() {
     const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
-
-    // Register centralized global client interceptors (safe against duplicates)
-    registerGlobalClientInterceptors({
-      getToken: () => this.getEffectiveToken(),
-      getRefreshToken: () => this.getEffectiveRefreshToken(),
-      getServerUrl: () => (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, ''),
-      onTokenRefreshed: (token, refreshToken) => {
-        this.setAuthSession(token, undefined, refreshToken);
+    client.setConfig({
+      baseUrl: serverUrl,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
     });
 
-    applyThingsBoardClientAuth(client, this.getEffectiveToken(), serverUrl);
+    // Register request interceptor for Bearer token injection & apiLogger
+    client.interceptors.request.use((request, options) => {
+      const token = this.getEffectiveToken();
+      if (token) {
+        request.headers.set('X-Authorization', `Bearer ${token}`);
+        request.headers.set('Authorization', `Bearer ${token}`);
+      }
+
+      const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
+      (request as any).__txId = txId;
+
+      let parsedBody: any = options?.body;
+      if (!parsedBody && request.body) {
+        try {
+          parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
+        } catch {
+          parsedBody = request.body;
+        }
+      }
+
+      apiLogger.logRequest(txId, request.method || 'GET', request.url || '', parsedBody);
+      return request;
+    });
+
+    // Register response interceptor for apiLogger
+    client.interceptors.response.use(async (response, request) => {
+      const txId = (request as any)?.__txId;
+      let responseBody: any = undefined;
+      try {
+        const clone = response.clone();
+        const text = await clone.text();
+        try {
+          responseBody = JSON.parse(text);
+        } catch {
+          responseBody = text;
+        }
+      } catch {
+        responseBody = response.body;
+      }
+
+      if (txId) {
+        apiLogger.logResponse(txId, response.status, responseBody);
+      }
+      return response;
+    });
   }
 
   /**
-   * Automatically discovers the native ThingsBoard JWT token from URL parameters,
-   * ThingsBoard session storage, or environment variables.
-   * Explicitly excludes external Authentik OIDC tokens to avoid 401 errors.
+   * Automatically discovers the active JWT token from OIDC session storage,
+   * URL parameters, or environment variables.
    */
   public findAutomaticJwt(): string | null {
     if (this.authToken && this.authToken.trim()) {
-      if (isAuthentikOidcToken(this.authToken)) {
-        console.warn('[ThingsBoard] Active token is an external Authentik token, rejecting for ThingsBoard API.');
-        this.authToken = null;
-      } else {
-        return this.authToken.trim();
-      }
+      return this.authToken.trim();
     }
 
     if (typeof window !== 'undefined') {
-      // 1. Scan window.location query & hash for tokens returned from ThingsBoard OAuth2 redirect
+      // 1. Scan window.location query & hash for tokens passed during redirect
       try {
-        const urlTokens = extractTokensFromUrl();
-        if (urlTokens.token && !isAuthentikOidcToken(urlTokens.token)) {
-          console.log('[ThingsBoard] Found native ThingsBoard session token from URL redirect callback.');
-          const validToken = urlTokens.token.trim();
-          this.authToken = validToken;
-          try {
-            localStorage.setItem('humid1_tb_jwt_token', validToken);
-            localStorage.setItem('humid1_active_jwt', validToken);
-            localStorage.setItem('tb_token', validToken);
-            if (urlTokens.refreshToken) {
-              const validRefresh = urlTokens.refreshToken.trim();
-              this.refreshToken = validRefresh;
-              localStorage.setItem('humid1_tb_jwt_refresh', validRefresh);
-              localStorage.setItem('humid1_active_refresh_token', validRefresh);
-            }
-          } catch {
-            // ignore
-          }
-          cleanUrlAfterAuth();
-          return validToken;
+        const urlParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const queryToken =
+          urlParams.get('token') ||
+          urlParams.get('accessToken') ||
+          urlParams.get('jwtToken') ||
+          urlParams.get('access_token') ||
+          urlParams.get('jwt') ||
+          urlParams.get('id_token') ||
+          hashParams.get('access_token') ||
+          hashParams.get('id_token') ||
+          hashParams.get('token');
+
+        if (queryToken && queryToken.trim()) {
+          return queryToken.trim();
         }
       } catch {
         // ignore
       }
 
-      // 2. Check explicit ThingsBoard token storage keys
+      // 2. Scan sessionStorage for oidc-client user objects
       try {
-        const explicitKeys = ['humid1_tb_jwt_token', 'tb_token', 'humid1_active_jwt'];
-        for (const key of explicitKeys) {
-          const val = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
-          if (val && val.trim() && val.includes('.')) {
-            const clean = normalizeBearerToken(val);
-            if (clean && !isAuthentikOidcToken(clean)) {
-              return clean;
-            } else if (clean && isAuthentikOidcToken(clean)) {
-              // Purge external Authentik token stored in ThingsBoard key
+        for (let i = 0; i < window.sessionStorage.length; i++) {
+          const key = window.sessionStorage.key(i);
+          if (key && (key.startsWith('oidc.user:') || key.includes('authentik') || key.includes('thingsboard'))) {
+            const rawVal = window.sessionStorage.getItem(key);
+            if (rawVal) {
               try {
-                window.localStorage.removeItem(key);
+                const parsed = JSON.parse(rawVal);
+                const candidate = parsed.access_token || parsed.id_token || parsed.token;
+                if (candidate && typeof candidate === 'string' && candidate.length > 20) {
+                  return candidate.trim();
+                }
               } catch {
-                // ignore
+                if (rawVal.length > 20 && rawVal.includes('.')) {
+                  return rawVal.trim();
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Scan localStorage for any stored OIDC sessions or tokens
+      try {
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const key = window.localStorage.key(i);
+          if (
+            key &&
+            (key.startsWith('oidc.user:') ||
+              key.includes('authentik_token') ||
+              key.includes('tb_token') ||
+              key === 'humid1_active_jwt' ||
+              key === 'humid1_tb_jwt_token')
+          ) {
+            const rawVal = window.localStorage.getItem(key);
+            if (rawVal) {
+              try {
+                const parsed = JSON.parse(rawVal);
+                const candidate = parsed.access_token || parsed.id_token || parsed.token;
+                if (candidate && typeof candidate === 'string') {
+                  return candidate.trim();
+                }
+              } catch {
+                if (rawVal.length > 20 && rawVal.includes('.')) {
+                  return rawVal.trim();
+                }
               }
             }
           }
@@ -183,7 +220,7 @@ class ThingsBoardService {
     }
 
     const envToken = getEnv('VITE_THINGSBOARD_TOKEN', '');
-    if (envToken && envToken.trim() && !isAuthentikOidcToken(envToken)) {
+    if (envToken && envToken.trim()) {
       return envToken.trim();
     }
 
@@ -213,67 +250,29 @@ class ThingsBoardService {
   }
 
   /**
-   * Sets ThingsBoard authentication session.
-   * Protects against external Authentik OIDC tokens being used as ThingsBoard API tokens.
+   * Called when Authentik OIDC authenticates or user signs in.
    */
-  public async setAuthSession(token: string | null, profile?: any, refreshToken?: string | null): Promise<void> {
-    const cleanToken = normalizeBearerToken(token);
-    const cleanRefresh = normalizeBearerToken(refreshToken);
-
-    if (!cleanToken) {
+  public async setAuthSession(token: string | null, profile?: any): Promise<void> {
+    if (!token) {
       this.authToken = null;
-      this.refreshToken = null;
       this.currentUser = null;
       this.devices = [];
       this.alarms = [];
       this.stopLivePolling();
       try {
         localStorage.removeItem('humid1_active_jwt');
-        localStorage.removeItem('humid1_active_refresh_token');
-        localStorage.removeItem('humid1_tb_jwt_token');
-        localStorage.removeItem('humid1_tb_jwt_refresh');
-        localStorage.removeItem('tb_token');
       } catch {
         // ignore
       }
-      applyThingsBoardClientAuth(client, null);
       this.notifyAuth();
       this.notifySubscribers();
       return;
     }
 
-    // Critical check: if an external Authentik OIDC token is passed, reject it from ThingsBoard API session
-    if (isAuthentikOidcToken(cleanToken)) {
-      console.warn(
-        '[ThingsBoard] An Authentik OIDC token was passed to ThingsBoard session. ' +
-        'ThingsBoard requires its native session token (via ThingsBoard OAuth2 redirect or username/password). ' +
-        'Preserving current ThingsBoard session.'
-      );
-      if (profile && !this.currentUser) {
-        this.currentUser = {
-          id: profile.sub || profile.id || 'oidc-user',
-          name: profile.name || profile.preferred_username || profile.email || 'Humid1 User',
-          email: profile.email || 'user@humid1.com',
-          role: 'OIDC User',
-        };
-        this.notifyAuth();
-      }
-      return;
-    }
-
-    this.authToken = cleanToken;
-    if (cleanRefresh) {
-      this.refreshToken = cleanRefresh;
-    }
+    this.authToken = token.trim();
     this.config.isConnected = true;
     try {
       localStorage.setItem('humid1_active_jwt', this.authToken);
-      localStorage.setItem('humid1_tb_jwt_token', this.authToken);
-      localStorage.setItem('tb_token', this.authToken);
-      if (this.refreshToken) {
-        localStorage.setItem('humid1_active_refresh_token', this.refreshToken);
-        localStorage.setItem('humid1_tb_jwt_refresh', this.refreshToken);
-      }
     } catch {
       // ignore
     }
@@ -300,35 +299,44 @@ class ThingsBoardService {
   }
 
   public extractProfileFromJwt(jwtToken: string) {
-    const decoded = decodeJwtPayload(jwtToken);
-    if (decoded) {
-      this.currentUser = {
-        id: (decoded.sub as string) || (decoded.userId as string) || 'authentik_user',
-        email: (decoded.email as string) || (decoded.preferred_username as string) || (decoded.sub as string) || 'User',
-        firstName: (decoded.name as string) || (decoded.given_name as string) || (decoded.firstName as string) || '',
-        lastName: (decoded.family_name as string) || (decoded.lastName as string) || '',
-        authority: typeof decoded.iss === 'string' && decoded.iss.includes('auth')
-          ? 'AUTHENTIK_SSO'
-          : ((decoded.scopes as any)?.[0] || (decoded.role as string) || 'CUSTOMER_USER'),
-      };
+    try {
+      const payloadBase64 = jwtToken.split('.')[1];
+      if (payloadBase64) {
+        const decodedJson = JSON.parse(atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/')));
+        this.currentUser = {
+          id: decodedJson.sub || decodedJson.userId || 'authentik_user',
+          email: decodedJson.email || decodedJson.preferred_username || decodedJson.sub || 'User',
+          firstName: decodedJson.name || decodedJson.given_name || decodedJson.firstName || '',
+          lastName: decodedJson.family_name || decodedJson.lastName || '',
+          authority: decodedJson.iss?.includes('auth') ? 'AUTHENTIK_SSO' : (decodedJson.scopes?.[0] || 'CUSTOMER_USER'),
+        };
+      }
+    } catch {
+      // ignore
     }
   }
 
   /**
-   * Login using @enerlab/thingsboard-client login method
+   * Login using OpenAPI client login method
    */
   public async loginWithCredentials(username: string, pass: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const res = await tbLogin(username, pass, { client: client as any });
+      const res = await apiLogin({
+        body: {
+          username,
+          password: pass,
+        },
+      });
 
-      if (res && res.token) {
-        await this.setAuthSession(res.token, undefined, res.refreshToken);
+      if (res.data && res.data.token) {
+        await this.setAuthSession(res.data.token);
         return { success: true };
       }
 
+      const errObj = res.error as any;
       return {
         success: false,
-        error: 'Authentication failed. Please verify credentials.',
+        error: errObj?.message || 'Authentication failed. Please verify credentials.',
       };
     } catch (err: any) {
       return {
@@ -340,7 +348,7 @@ class ThingsBoardService {
 
   public async logout(): Promise<void> {
     try {
-      tbLogout({ client: client as any });
+      await apiLogout();
     } catch {
       // ignore
     }
@@ -467,57 +475,17 @@ class ThingsBoardService {
 
   public getEffectiveToken(): string | null {
     if (this.config.thingsboardToken && this.config.thingsboardToken.trim()) {
-      const clean = normalizeBearerToken(this.config.thingsboardToken);
-      if (clean) return clean;
+      return this.config.thingsboardToken.trim();
     }
     if (this.authToken && this.authToken.trim()) {
-      const clean = normalizeBearerToken(this.authToken);
-      if (clean) return clean;
+      return this.authToken.trim();
     }
     const autoToken = this.findAutomaticJwt();
     if (autoToken) {
-      const clean = normalizeBearerToken(autoToken);
-      if (clean) {
-        this.authToken = clean;
-        return clean;
-      }
+      this.authToken = autoToken;
+      return autoToken;
     }
     return null;
-  }
-
-  public getEffectiveRefreshToken(): string | null {
-    if (this.refreshToken && this.refreshToken.trim()) {
-      return normalizeBearerToken(this.refreshToken);
-    }
-    if (typeof window !== 'undefined') {
-      const stored =
-        localStorage.getItem('humid1_active_refresh_token') ||
-        localStorage.getItem('humid1_tb_jwt_refresh') ||
-        sessionStorage.getItem('humid1_active_refresh_token');
-      if (stored) {
-        return normalizeBearerToken(stored);
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Silent Token Refresh
-   */
-  public async trySilentTokenRefresh(): Promise<boolean> {
-    const refresh = this.getEffectiveRefreshToken();
-    if (!refresh) return false;
-    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
-    try {
-      const refreshed = await performSilentTokenRefresh(serverUrl, refresh);
-      if (refreshed) {
-        await this.setAuthSession(refreshed.token, undefined, refreshed.refreshToken);
-        return true;
-      }
-    } catch (err) {
-      console.warn('[ThingsBoard] Silent token refresh failed:', err);
-    }
-    return false;
   }
 
   public initRealBackend() {
@@ -529,10 +497,6 @@ class ThingsBoardService {
     this.fetchRealAlarms();
 
     this.livePollInterval = window.setInterval(() => {
-      // Pause telemetry polling when tab is hidden to prevent request flood
-      if (typeof document !== 'undefined' && document.hidden) {
-        return;
-      }
       if (this.getEffectiveToken()) {
         this.fetchRealDevices();
         this.fetchRealAlarms();
@@ -622,14 +586,14 @@ class ThingsBoardService {
         }
       }
 
-      // 2. Try all device infos
+      // 2. Try tenant device infos
       if (rawDevices.length === 0) {
         try {
-          const allRes = await apiGetAllDeviceInfos({
+          const tenantRes = await apiGetTenantDeviceInfos({
             query: { pageSize: 100, page: 0 },
           });
-          if (allRes.data && Array.isArray((allRes.data as any).data)) {
-            rawDevices = (allRes.data as any).data;
+          if (tenantRes.data && Array.isArray((tenantRes.data as any).data)) {
+            rawDevices = (tenantRes.data as any).data;
           }
         } catch {
           // ignore
@@ -640,7 +604,7 @@ class ThingsBoardService {
       if (rawDevices.length === 0) {
         try {
           const tenantDevRes = await apiGetTenantDevices({
-            query: { pageSize: 100, page: 0 } as any,
+            query: { pageSize: 100, page: 0 },
           });
           if (tenantDevRes.data && Array.isArray((tenantDevRes.data as any).data)) {
             rawDevices = (tenantDevRes.data as any).data;
@@ -688,16 +652,14 @@ class ThingsBoardService {
             manual_ota_trigger: false,
           };
 
-          // Fetch real latest timeseries via apiGetLatestTimeseries
+          // Fetch real latest timeseries via /src_lib/client apiGetLatestTimeseries
           try {
             const telRes = await apiGetLatestTimeseries({
               path: {
                 entityType: 'DEVICE',
                 entityId: devId,
               },
-              requestValidator: undefined,
-              responseValidator: undefined,
-            } as any);
+            });
 
             if (telRes.data) {
               const telData = telRes.data as Record<string, Array<{ ts: number; value: any }>>;
@@ -723,82 +685,50 @@ class ThingsBoardService {
             // ignore
           }
 
-          // Cache client & shared attributes (TTL 5 minutes) to avoid 20+ redundant HTTP calls per minute
-          const cachedAttr = this.deviceAttrCache.get(devId);
-          const now = Date.now();
-          const shouldFetchAttributes = !cachedAttr || now - cachedAttr.fetchedAt > 300000;
-
-          if (!shouldFetchAttributes && cachedAttr) {
-            clientAttr = { ...cachedAttr.client };
-            sharedAttr = { ...cachedAttr.shared };
-          } else {
-            // Fetch client attributes via apiGetAttributesByScope
-            try {
-              const attrRes = await apiGetAttributesByScope({
-                path: {
-                  entityType: 'DEVICE',
-                  entityId: devId,
-                  scope: 'CLIENT_SCOPE',
-                },
-                requestValidator: undefined,
-                responseValidator: undefined,
-              } as any);
-
-              if (attrRes.data && Array.isArray(attrRes.data)) {
-                (attrRes.data as any[]).forEach((a: any) => {
-                  if (a.key in clientAttr) (clientAttr as any)[a.key] = a.value;
-                });
-              }
-            } catch {
-              // ignore
-            }
-
-            // Fetch shared attributes via apiGetAttributesByScope
-            try {
-              const sharedRes = await apiGetAttributesByScope({
-                path: {
-                  entityType: 'DEVICE',
-                  entityId: devId,
-                  scope: 'SHARED_SCOPE',
-                },
-                requestValidator: undefined,
-                responseValidator: undefined,
-              } as any);
-
-              if (sharedRes.data && Array.isArray(sharedRes.data)) {
-                (sharedRes.data as any[]).forEach((a: any) => {
-                  if (a.key in sharedAttr) (sharedAttr as any)[a.key] = a.value;
-                });
-              }
-            } catch {
-              // ignore
-            }
-
-            // Store in cache
-            this.deviceAttrCache.set(devId, {
-              client: { ...clientAttr },
-              shared: { ...sharedAttr },
-              fetchedAt: now,
+          // Fetch client attributes via /src_lib/client apiGetAttributesByScope
+          try {
+            const attrRes = await apiGetAttributesByScope({
+              path: {
+                entityType: 'DEVICE',
+                entityId: devId,
+                scope: 'CLIENT_SCOPE',
+              },
             });
+
+            if (attrRes.data && Array.isArray(attrRes.data)) {
+              (attrRes.data as any[]).forEach((a: any) => {
+                if (a.key in clientAttr) (clientAttr as any)[a.key] = a.value;
+              });
+            }
+          } catch {
+            // ignore
           }
 
-          // Variable sleep status check
-          const timeSincePacket = Date.now() - (telemetry.timestamp || 0);
-          let deviceStatus: DeviceStatus = 'OFFLINE';
-          if (telemetry.timestamp && telemetry.timestamp > 0) {
-            if (timeSincePacket <= 180 * 1000) {
-              deviceStatus = 'ONLINE';
-            } else if (timeSincePacket <= 86400 * 1000) {
-              deviceStatus = 'SLEEP';
-            } else {
-              deviceStatus = 'OFFLINE';
+          // Fetch shared attributes via /src_lib/client apiGetAttributesByScope
+          try {
+            const sharedRes = await apiGetAttributesByScope({
+              path: {
+                entityType: 'DEVICE',
+                entityId: devId,
+                scope: 'SHARED_SCOPE',
+              },
+            });
+
+            if (sharedRes.data && Array.isArray(sharedRes.data)) {
+              (sharedRes.data as any[]).forEach((a: any) => {
+                if (a.key in sharedAttr) (sharedAttr as any)[a.key] = a.value;
+              });
             }
+          } catch {
+            // ignore
           }
+
+          const isOnline = Date.now() - telemetry.timestamp < 1800 * 1000;
 
           return {
             id: devId,
             name: devLabel,
-            status: deviceStatus,
+            status: isOnline ? 'ONLINE' : 'OFFLINE',
             lastActivityTime: telemetry.timestamp,
             latestFwAvailable: 'v1.2.0',
             telemetry,
@@ -810,32 +740,8 @@ class ThingsBoardService {
         })
       );
 
-      // Only refresh live data & notify subscribers when NEW telemetry data hits ThingsBoard
-      let hasChanged = this.devices.length !== enrichedDevices.length;
-      if (!hasChanged) {
-        for (let i = 0; i < enrichedDevices.length; i++) {
-          const oldD = this.devices[i];
-          const newD = enrichedDevices[i];
-          if (
-            !oldD ||
-            oldD.id !== newD.id ||
-            oldD.status !== newD.status ||
-            oldD.telemetry.timestamp !== newD.telemetry.timestamp ||
-            oldD.telemetry.rh !== newD.telemetry.rh ||
-            oldD.telemetry.temp !== newD.telemetry.temp ||
-            oldD.telemetry.battery !== newD.telemetry.battery ||
-            oldD.telemetry.rssi !== newD.telemetry.rssi
-          ) {
-            hasChanged = true;
-            break;
-          }
-        }
-      }
-
-      if (hasChanged) {
-        this.devices = enrichedDevices;
-        this.notifySubscribers();
-      }
+      this.devices = enrichedDevices;
+      this.notifySubscribers();
       return this.devices;
     } catch (err) {
       console.warn('Failed to fetch devices from ThingsBoard API:', err);
@@ -888,7 +794,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Claim device using @enerlab/thingsboard-client (apiClaimDevice)
+   * Claim device using the TypeScript OpenAPI library in /src_lib/client/ (apiClaimDevice)
    */
   public async claimDevice(deviceName: string, secretKey: string): Promise<HumidorDevice> {
     const token = this.getEffectiveToken();
@@ -908,7 +814,7 @@ class ThingsBoardService {
       deviceName: cleanDeviceName,
       secretKey: cleanSecret ? '••••••' : '(None)',
       status: 'PENDING',
-      message: `Dispatching claim request for "${cleanDeviceName}" via ThingsBoard REST API...`,
+      message: `Dispatching claim request for "${cleanDeviceName}" via /src_lib/client...`,
     };
 
     try {
@@ -917,7 +823,7 @@ class ThingsBoardService {
           deviceName: cleanDeviceName,
         },
         body: cleanSecret ? { secretKey: cleanSecret } : undefined,
-      } as any);
+      });
 
       if (claimRes.error) {
         const errObj = claimRes.error as any;
@@ -1021,9 +927,9 @@ class ThingsBoardService {
   }
 
   /**
-   * Reclaim / Unclaim device from customer account via apiReClaimDevice
+   * Reclaim device via /src_lib/client apiReClaimDevice
    */
-  public async unclaimDevice(deviceName: string, deviceId?: string): Promise<boolean> {
+  public async unclaimDevice(deviceName: string): Promise<boolean> {
     const token = this.getEffectiveToken();
     if (!token) {
       throw new Error('Not connected to ThingsBoard.');
@@ -1043,45 +949,15 @@ class ThingsBoardService {
 
     this.devices = this.devices.filter(
       (d) =>
-        d.id !== deviceId &&
         d.name.toLowerCase() !== cleanDeviceName.toLowerCase() &&
         d.clientAttributes.device_name?.toLowerCase() !== cleanDeviceName.toLowerCase()
     );
-    if (deviceId) {
-      this.deviceAttrCache.delete(deviceId);
-    }
     this.notifySubscribers();
     return true;
   }
 
   /**
-   * Delete device entity from ThingsBoard server via apiDeleteDevice
-   */
-  public async deleteDevice(deviceId: string): Promise<boolean> {
-    const token = this.getEffectiveToken();
-    if (!token) {
-      throw new Error('Not connected to ThingsBoard.');
-    }
-
-    const res = await apiDeleteDevice({
-      path: {
-        deviceId,
-      },
-    } as any);
-
-    if (res.error) {
-      const errObj = res.error as any;
-      throw new Error(errObj?.message || `Failed to delete device ID "${deviceId}" from server`);
-    }
-
-    this.devices = this.devices.filter((d) => d.id !== deviceId);
-    this.deviceAttrCache.delete(deviceId);
-    this.notifySubscribers();
-    return true;
-  }
-
-  /**
-   * Get timeseries history via @enerlab/thingsboard-client apiGetLatestTimeseries
+   * Get timeseries history via /src_lib/client apiGetTimeseriesHistory
    */
   public async getHistory(deviceId: string, rangeHours: number = 72): Promise<HistoricalTelemetryPoint[]> {
     const token = this.getEffectiveToken();
@@ -1092,7 +968,7 @@ class ThingsBoardService {
       const endTs = Date.now();
       const limit = '500';
 
-      const res = await apiGetLatestTimeseries({
+      const res = await apiGetTimeseriesHistory({
         path: {
           entityType: 'DEVICE',
           entityId: deviceId,
@@ -1102,8 +978,7 @@ class ThingsBoardService {
           startTs,
           endTs,
           limit,
-          agg: 'NONE',
-        } as any,
+        },
       });
 
       if (res.data) {
