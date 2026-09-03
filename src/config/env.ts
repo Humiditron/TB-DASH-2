@@ -17,6 +17,7 @@ export interface Humid1Config {
   authentikSlug: string;  // e.g. "humid1-dash"
   authentikClientId: string; // Authentik OAuth2 Provider Client ID
   ssoAuthorizationEndpoint: string;
+  thingsboardOAuthProviderPath?: string;
   defaultDeviceName: string;
   isSimulatedDefault: boolean;
   version: string;
@@ -91,8 +92,9 @@ export const APP_CONFIG: Humid1Config = {
   ssoAuthorizationEndpoint: resolveEnv(
     'SSO_AUTH_ENDPOINT',
     import.meta.env.VITE_SSO_AUTH_ENDPOINT || '',
-    'https://app.humid1.com/oauth2/authorization/authentik'
+    'https://app.humid1.com/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365'
   ),
+  thingsboardOAuthProviderPath: '/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365',
   defaultDeviceName: import.meta.env.VITE_DEFAULT_DEVICE_NAME || 'HUMID1-CABINET-01',
   isSimulatedDefault: false,
   version: '1.2.0',
@@ -156,8 +158,14 @@ export function getAuthentikOidcAuthorizeUrl(customClientId?: string, customRetu
 /**
  * Generates ThingsBoard OAuth2 Gateway authorization URL with return redirects attached
  */
-export function getThingsBoardOAuth2Url(serverUrl?: string, customReturnUrl?: string): string {
+export function getThingsBoardOAuth2Url(
+  serverUrl?: string,
+  customReturnUrl?: string,
+  customProviderPath?: string
+): string {
   const base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
   const returnUrl = customReturnUrl || getCurrentReturnUrl();
-  return `${base}/oauth2/authorization/authentik?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}`;
+  const providerPath = customProviderPath || APP_CONFIG.thingsboardOAuthProviderPath || '/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365';
+  const cleanPath = providerPath.startsWith('/') ? providerPath : `/${providerPath}`;
+  return `${base}${cleanPath}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}`;
 }

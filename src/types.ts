@@ -145,6 +145,8 @@ export interface ApiTransaction {
   responsePayload?: any;
   durationMs?: number;
   error?: string;
+  authHeader?: string;
+  hasToken?: boolean;
 }
 
 export type TempUnit = 'F' | 'C';
