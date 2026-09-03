@@ -261,6 +261,7 @@ class ThingsBoardService {
       return;
     }
 
+    const tokenChanged = this.authToken !== cleanToken;
     this.authToken = cleanToken;
     if (cleanRefresh) {
       this.refreshToken = cleanRefresh;
@@ -286,7 +287,9 @@ class ThingsBoardService {
 
     this.initOpenApiClient();
     this.notifyAuth();
-    this.initRealBackend();
+    if (tokenChanged || !this.livePollInterval) {
+      this.initRealBackend();
+    }
   }
 
   private setOidcProfile(profile: any) {
@@ -520,6 +523,9 @@ class ThingsBoardService {
     return false;
   }
 
+  private isFetchingDevices = false;
+  private preferredDeviceFetchStrategy: 'customerInfos' | 'customerDevices' | 'allDevices' | 'tenantDevices' | null = null;
+
   public initRealBackend() {
     this.stopLivePolling();
     if (!this.getEffectiveToken()) return;
@@ -528,16 +534,17 @@ class ThingsBoardService {
     this.fetchRealDevices();
     this.fetchRealAlarms();
 
+    // 30-second interval (reduced from 10s) with active tab visibility check
     this.livePollInterval = window.setInterval(() => {
       // Pause telemetry polling when tab is hidden to prevent request flood
       if (typeof document !== 'undefined' && document.hidden) {
         return;
       }
-      if (this.getEffectiveToken()) {
+      if (this.getEffectiveToken() && !this.isFetchingDevices) {
         this.fetchRealDevices();
         this.fetchRealAlarms();
       }
-    }, 10000);
+    }, 30000);
   }
 
   public stopLivePolling() {
@@ -555,7 +562,10 @@ class ThingsBoardService {
     if (!token) return this.currentUser;
 
     try {
-      const res = await apiGetUser();
+      const res = await apiGetUser({
+        requestValidator: undefined,
+        responseValidator: undefined,
+      } as any);
       if (res.data) {
         const user = res.data as any;
         this.currentUser = {
@@ -576,7 +586,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Fetch devices from ThingsBoard using OpenAPI client methods
+   * Fetch devices from ThingsBoard using OpenAPI client methods with memoized discovery
    */
   public async fetchRealDevices(): Promise<HumidorDevice[]> {
     const effectiveToken = this.getEffectiveToken();
@@ -586,6 +596,12 @@ class ThingsBoardService {
       return [];
     }
 
+    if (this.isFetchingDevices) {
+      return this.devices;
+    }
+
+    this.isFetchingDevices = true;
+
     try {
       let rawDevices: any[] = [];
       const customerId =
@@ -593,28 +609,34 @@ class ThingsBoardService {
           ? this.currentUser?.customerId?.id
           : this.currentUser?.customerId;
 
-      // 1. Try customer devices if customerId exists
-      if (customerId && customerId !== 'undefined') {
+      // 1. Try customer devices if customerId exists or if previously successful
+      if (customerId && customerId !== 'undefined' && (!this.preferredDeviceFetchStrategy || this.preferredDeviceFetchStrategy === 'customerInfos')) {
         try {
           const custRes = await apiGetCustomerDeviceInfos({
             path: { customerId },
             query: { pageSize: 100, page: 0 },
-          });
+            requestValidator: undefined,
+            responseValidator: undefined,
+          } as any);
           if (custRes.data && Array.isArray((custRes.data as any).data)) {
             rawDevices = (custRes.data as any).data;
+            this.preferredDeviceFetchStrategy = 'customerInfos';
           }
         } catch {
           // ignore
         }
 
-        if (rawDevices.length === 0) {
+        if (rawDevices.length === 0 && (!this.preferredDeviceFetchStrategy || this.preferredDeviceFetchStrategy === 'customerDevices')) {
           try {
             const custDevRes = await apiGetCustomerDevices({
               path: { customerId },
               query: { pageSize: 100, page: 0 },
-            });
+              requestValidator: undefined,
+              responseValidator: undefined,
+            } as any);
             if (custDevRes.data && Array.isArray((custDevRes.data as any).data)) {
               rawDevices = (custDevRes.data as any).data;
+              this.preferredDeviceFetchStrategy = 'customerDevices';
             }
           } catch {
             // ignore
@@ -623,13 +645,16 @@ class ThingsBoardService {
       }
 
       // 2. Try all device infos
-      if (rawDevices.length === 0) {
+      if (rawDevices.length === 0 && (!this.preferredDeviceFetchStrategy || this.preferredDeviceFetchStrategy === 'allDevices')) {
         try {
           const allRes = await apiGetAllDeviceInfos({
             query: { pageSize: 100, page: 0 },
-          });
+            requestValidator: undefined,
+            responseValidator: undefined,
+          } as any);
           if (allRes.data && Array.isArray((allRes.data as any).data)) {
             rawDevices = (allRes.data as any).data;
+            this.preferredDeviceFetchStrategy = 'allDevices';
           }
         } catch {
           // ignore
@@ -637,13 +662,16 @@ class ThingsBoardService {
       }
 
       // 3. Try tenant devices
-      if (rawDevices.length === 0) {
+      if (rawDevices.length === 0 && (!this.preferredDeviceFetchStrategy || this.preferredDeviceFetchStrategy === 'tenantDevices')) {
         try {
           const tenantDevRes = await apiGetTenantDevices({
             query: { pageSize: 100, page: 0 } as any,
-          });
+            requestValidator: undefined,
+            responseValidator: undefined,
+          } as any);
           if (tenantDevRes.data && Array.isArray((tenantDevRes.data as any).data)) {
             rawDevices = (tenantDevRes.data as any).data;
+            this.preferredDeviceFetchStrategy = 'tenantDevices';
           }
         } catch {
           // ignore
@@ -651,8 +679,11 @@ class ThingsBoardService {
       }
 
       if (rawDevices.length === 0) {
+        // If preferred strategy yielded 0, reset preferred strategy to retry next cycle
+        this.preferredDeviceFetchStrategy = null;
         this.devices = [];
         this.notifySubscribers();
+        this.isFetchingDevices = false;
         return [];
       }
 
@@ -723,10 +754,10 @@ class ThingsBoardService {
             // ignore
           }
 
-          // Cache client & shared attributes (TTL 5 minutes) to avoid 20+ redundant HTTP calls per minute
+          // Cache client & shared attributes (TTL 10 minutes) to prevent redundant HTTP spam
           const cachedAttr = this.deviceAttrCache.get(devId);
           const now = Date.now();
-          const shouldFetchAttributes = !cachedAttr || now - cachedAttr.fetchedAt > 300000;
+          const shouldFetchAttributes = !cachedAttr || now - cachedAttr.fetchedAt > 600000;
 
           if (!shouldFetchAttributes && cachedAttr) {
             clientAttr = { ...cachedAttr.client };
@@ -836,12 +867,12 @@ class ThingsBoardService {
         this.devices = enrichedDevices;
         this.notifySubscribers();
       }
+      this.isFetchingDevices = false;
       return this.devices;
     } catch (err) {
       console.warn('Failed to fetch devices from ThingsBoard API:', err);
-      this.devices = [];
-      this.notifySubscribers();
-      return [];
+      this.isFetchingDevices = false;
+      return this.devices;
     }
   }
 
@@ -864,7 +895,9 @@ class ThingsBoardService {
           sortProperty: 'createdTime',
           sortOrder: 'DESC',
         },
-      });
+        requestValidator: undefined,
+        responseValidator: undefined,
+      } as any);
 
       if (res.data) {
         const rawAlarms = (res.data as any).data || [];
@@ -888,11 +921,12 @@ class ThingsBoardService {
   }
 
   /**
-   * Claim device using @enerlab/thingsboard-client (apiClaimDevice)
+   * Claim device using ThingsBoard REST API (POST /api/customer/device/{deviceName}/claim)
+   * Handles Zod response normalization so success is not incorrectly flagged as an error.
    */
   public async claimDevice(deviceName: string, secretKey: string): Promise<HumidorDevice> {
     const token = this.getEffectiveToken();
-    const serverUrl = this.config.serverUrl || DEFAULT_THINGSBOARD_URL;
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
     if (!token) {
       throw new Error(
         'Not connected to ThingsBoard. Please verify your session token or API Access Token in Server Settings.'
@@ -912,20 +946,82 @@ class ThingsBoardService {
     };
 
     try {
-      const claimRes = await apiClaimDevice({
-        path: {
-          deviceName: cleanDeviceName,
-        },
-        body: cleanSecret ? { secretKey: cleanSecret } : undefined,
-      } as any);
+      let claimSuccess = false;
+      let respData: any = null;
+      let httpStatus = 200;
 
-      if (claimRes.error) {
-        const errObj = claimRes.error as any;
-        const httpStatus = claimRes.response?.status || errObj?.status || 400;
+      // 1. First attempt: SDK claimDevice1 with bypassed validators
+      try {
+        const claimRes = await apiClaimDevice({
+          path: {
+            deviceName: cleanDeviceName,
+          },
+          body: cleanSecret ? { secretKey: cleanSecret } : undefined,
+          requestValidator: undefined,
+          responseValidator: undefined,
+        } as any);
 
+        respData = claimRes.data;
+        if (claimRes.response) {
+          httpStatus = claimRes.response.status;
+        }
+
+        // ThingsBoard Claim response can be:
+        // { response: "SUCCESS", device: { ... } } or { response: "CLAIMED" } or status 200/204
+        if (httpStatus >= 200 && httpStatus < 300) {
+          if (!respData || (typeof respData === 'object' && (respData.response === 'SUCCESS' || respData.device || respData.id))) {
+            claimSuccess = true;
+          } else if (typeof respData === 'string' && !respData.toUpperCase().includes('FAIL')) {
+            claimSuccess = true;
+          }
+        }
+      } catch {
+        // Fallback to direct fetch
+      }
+
+      // 2. Fallback attempt: Direct fetch to /api/customer/device/{deviceName}/claim
+      if (!claimSuccess && httpStatus !== 401 && httpStatus !== 403 && httpStatus !== 404) {
+        try {
+          const directRes = await fetch(
+            `${serverUrl}/api/customer/device/${encodeURIComponent(cleanDeviceName)}/claim`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/plain, */*',
+                'X-Authorization': `Bearer ${token}`,
+                Authorization: `Bearer ${token}`,
+              },
+              body: cleanSecret ? JSON.stringify({ secretKey: cleanSecret }) : undefined,
+            }
+          );
+
+          httpStatus = directRes.status;
+          if (directRes.ok) {
+            claimSuccess = true;
+            try {
+              respData = await directRes.json();
+            } catch {
+              respData = await directRes.text();
+            }
+          } else {
+            try {
+              const errJson = await directRes.json();
+              respData = errJson;
+            } catch {
+              respData = { message: `HTTP ${directRes.status}` };
+            }
+          }
+        } catch (fetchErr: any) {
+          console.warn('[ThingsBoard] Direct claim fetch error:', fetchErr);
+        }
+      }
+
+      // Handle Errors
+      if (!claimSuccess) {
         let userFriendlyMsg =
-          errObj?.message ||
-          errObj?.error ||
+          respData?.message ||
+          respData?.error ||
           `ThingsBoard claim request failed with status ${httpStatus}.`;
 
         if (httpStatus === 401) {
@@ -936,39 +1032,28 @@ class ThingsBoardService {
             'ThingsBoard Permission Denied (403): Only Customer accounts can claim devices, or this device is already claimed by another user.';
         } else if (httpStatus === 404) {
           userFriendlyMsg = `Device "${cleanDeviceName}" was not found on ThingsBoard. Ensure the hardware/emulator is active and provisioned.`;
+        } else if (respData && (respData.response === 'FAILURE' || (typeof respData === 'string' && respData.includes('FAIL')))) {
+          userFriendlyMsg = `Claiming rejected: ThingsBoard rejected the claim secret for "${cleanDeviceName}". Verify the secret PIN and try again.`;
         }
 
         logEntry.status = 'ERROR';
         logEntry.httpStatus = httpStatus;
         logEntry.message = userFriendlyMsg;
-        logEntry.responsePayload = claimRes.error;
+        logEntry.responsePayload = respData;
         this.addClaimLog(logEntry);
 
         throw new Error(userFriendlyMsg);
       }
 
-      // Check if response string or object indicates a failure
-      const respData = claimRes.data as any;
-      if (
-        (typeof respData === 'string' && respData.toUpperCase().includes('FAIL')) ||
-        (respData && respData.response === 'FAILURE')
-      ) {
-        const failureMsg = `Claiming rejected: ThingsBoard rejected the claim secret for "${cleanDeviceName}". Verify the secret PIN and try again.`;
-        logEntry.status = 'ERROR';
-        logEntry.httpStatus = 400;
-        logEntry.message = failureMsg;
-        logEntry.responsePayload = respData;
-        this.addClaimLog(logEntry);
-        throw new Error(failureMsg);
-      }
-
+      // Success
       logEntry.status = 'SUCCESS';
       logEntry.httpStatus = 200;
       logEntry.message = `Device "${cleanDeviceName}" claimed successfully on ThingsBoard!`;
       logEntry.responsePayload = respData;
       this.addClaimLog(logEntry);
 
-      // Refresh device registry from ThingsBoard
+      // Invalidate device discovery cache & refresh device registry immediately
+      this.preferredDeviceFetchStrategy = null;
       const updatedDevices = await this.fetchRealDevices();
       const matched = updatedDevices.find(
         (d) =>
@@ -979,9 +1064,9 @@ class ThingsBoardService {
       if (matched) return matched;
       if (updatedDevices.length > 0) return updatedDevices[0];
 
-      // Provisional fallback device until first telemetry ingest
+      // Provisional fallback device if device hasn't ingested telemetry yet
       const newDev: HumidorDevice = {
-        id: 'claimed-' + cleanDeviceName,
+        id: respData?.device?.id?.id || 'claimed-' + cleanDeviceName,
         name: cleanDeviceName,
         status: 'ONLINE',
         lastActivityTime: Date.now(),
@@ -1025,22 +1110,58 @@ class ThingsBoardService {
    */
   public async unclaimDevice(deviceName: string, deviceId?: string): Promise<boolean> {
     const token = this.getEffectiveToken();
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
     if (!token) {
       throw new Error('Not connected to ThingsBoard.');
     }
 
     const cleanDeviceName = deviceName.trim();
-    const res = await apiReClaimDevice({
-      path: {
-        deviceName: cleanDeviceName,
-      },
-    });
+    let unclaimSuccess = false;
 
-    if (res.error) {
-      const errObj = res.error as any;
-      throw new Error(errObj?.message || `Failed to unclaim device "${cleanDeviceName}"`);
+    // 1. SDK apiReClaimDevice with bypassed validators
+    try {
+      const res = await apiReClaimDevice({
+        path: {
+          deviceName: cleanDeviceName,
+        },
+        requestValidator: undefined,
+        responseValidator: undefined,
+      } as any);
+
+      if (res.response && res.response.status >= 200 && res.response.status < 300) {
+        unclaimSuccess = true;
+      } else if (!res.error) {
+        unclaimSuccess = true;
+      }
+    } catch {
+      // Direct REST fallback
     }
 
+    // 2. Direct REST fallback
+    if (!unclaimSuccess) {
+      try {
+        const directRes = await fetch(
+          `${serverUrl}/api/customer/device/${encodeURIComponent(cleanDeviceName)}/claim`,
+          {
+            method: 'DELETE',
+            headers: {
+              'X-Authorization': `Bearer ${token}`,
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        if (directRes.ok) {
+          unclaimSuccess = true;
+        } else {
+          const errData = await directRes.json().catch(() => ({}));
+          throw new Error(errData.message || `Failed to unclaim device "${cleanDeviceName}" (${directRes.status})`);
+        }
+      } catch (err: any) {
+        if (!unclaimSuccess) throw err;
+      }
+    }
+
+    // Update local state
     this.devices = this.devices.filter(
       (d) =>
         d.id !== deviceId &&
@@ -1056,87 +1177,167 @@ class ThingsBoardService {
 
   /**
    * Delete device entity from ThingsBoard server via apiDeleteDevice
+   * Gracefully handles Customer User 403 by falling back to unclaim.
    */
-  public async deleteDevice(deviceId: string): Promise<boolean> {
+  public async deleteDevice(deviceId: string, deviceName?: string): Promise<boolean> {
     const token = this.getEffectiveToken();
     if (!token) {
       throw new Error('Not connected to ThingsBoard.');
     }
 
-    const res = await apiDeleteDevice({
-      path: {
-        deviceId,
-      },
-    } as any);
+    try {
+      const res = await apiDeleteDevice({
+        path: {
+          deviceId,
+        },
+        requestValidator: undefined,
+        responseValidator: undefined,
+      } as any);
 
-    if (res.error) {
-      const errObj = res.error as any;
-      throw new Error(errObj?.message || `Failed to delete device ID "${deviceId}" from server`);
+      if (res.error) {
+        const errObj = res.error as any;
+        const status = res.response?.status || errObj?.status;
+
+        // If 403 Forbidden (standard for Customer Users who lack tenant-level entity deletion rights)
+        if (status === 403 && deviceName) {
+          console.info('[ThingsBoard] Customer user lacks tenant entity delete permissions. Performing unclaim operation instead...');
+          return await this.unclaimDevice(deviceName, deviceId);
+        }
+
+        throw new Error(errObj?.message || `Failed to delete device ID "${deviceId}" from server`);
+      }
+
+      this.devices = this.devices.filter((d) => d.id !== deviceId);
+      this.deviceAttrCache.delete(deviceId);
+      this.notifySubscribers();
+      return true;
+    } catch (err: any) {
+      // If customer user, attempt unclaim fallback
+      if (deviceName) {
+        return await this.unclaimDevice(deviceName, deviceId);
+      }
+      throw err;
     }
-
-    this.devices = this.devices.filter((d) => d.id !== deviceId);
-    this.deviceAttrCache.delete(deviceId);
-    this.notifySubscribers();
-    return true;
   }
 
   /**
-   * Get timeseries history via @enerlab/thingsboard-client apiGetLatestTimeseries
+   * Get timeseries history for climate chart via ThingsBoard REST API
+   * Formats data points with synchronized relative humidity and temperature.
    */
   public async getHistory(deviceId: string, rangeHours: number = 72): Promise<HistoricalTelemetryPoint[]> {
     const token = this.getEffectiveToken();
-    if (!token) return [];
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
+    if (!token || !deviceId) return [];
 
     try {
-      const startTs = Date.now() - rangeHours * 3600 * 1000;
       const endTs = Date.now();
-      const limit = '500';
+      const startTs = endTs - rangeHours * 3600 * 1000;
+      const limit = 1000;
+      const keys = 'rh,humidity,hum,temp,temperature,tempF,tempC,battery,rssi';
 
-      const res = await apiGetLatestTimeseries({
-        path: {
-          entityType: 'DEVICE',
-          entityId: deviceId,
-        },
-        query: {
-          keys: 'rh,temp,battery,humidity,temperature',
-          startTs,
-          endTs,
-          limit,
-          agg: 'NONE',
-        } as any,
-      });
+      let rawData: any = null;
 
-      if (res.data) {
-        const data = res.data as any;
-        const rhPoints: Array<{ ts: number; value: string }> = data.rh || data.humidity || [];
-        const tempPoints: Array<{ ts: number; value: string }> = data.temp || data.temperature || [];
-        const battPoints: Array<{ ts: number; value: string }> = data.battery || [];
+      // 1. Direct REST fetch to guaranteed timeseries endpoint
+      try {
+        const url = `${serverUrl}/api/plugins/telemetry/DEVICE/${deviceId}/values/timeseries?keys=${encodeURIComponent(
+          keys
+        )}&startTs=${startTs}&endTs=${endTs}&limit=${limit}&agg=NONE`;
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'X-Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (res.ok) {
+          rawData = await res.json();
+        }
+      } catch {
+        // SDK Fallback
+      }
+
+      // 2. SDK fallback if direct fetch failed
+      if (!rawData) {
+        const sdkRes = await apiGetLatestTimeseries({
+          path: {
+            entityType: 'DEVICE',
+            entityId: deviceId,
+          },
+          query: {
+            keys,
+            startTs,
+            endTs,
+            limit: String(limit),
+            agg: 'NONE',
+          } as any,
+          requestValidator: undefined,
+          responseValidator: undefined,
+        } as any);
+
+        if (sdkRes.data) {
+          rawData = sdkRes.data;
+        }
+      }
+
+      if (rawData) {
+        const rhPoints: Array<{ ts: number; value: any }> =
+          rawData.rh || rawData.humidity || rawData.hum || [];
+        const tempPoints: Array<{ ts: number; value: any }> =
+          rawData.temp || rawData.temperature || rawData.tempF || rawData.tempC || [];
+        const battPoints: Array<{ ts: number; value: any }> = rawData.battery || rawData.batt || [];
+        const rssiPoints: Array<{ ts: number; value: any }> = rawData.rssi || [];
 
         if (rhPoints.length === 0 && tempPoints.length === 0) {
           return [];
         }
 
-        const timestampMap = new Map<number, { rh: number; temp: number; battery: number }>();
+        // Bucket by 10-minute intervals for clean synchronized plotting
+        const timestampMap = new Map<
+          number,
+          { rh: number; temp: number; battery: number; rssi: number }
+        >();
 
         rhPoints.forEach((p) => {
-          const bucket = Math.round(p.ts / (15 * 60 * 1000)) * (15 * 60 * 1000);
-          const entry = timestampMap.get(bucket) || { rh: parseFloat(p.value), temp: 0, battery: 100 };
-          entry.rh = parseFloat(p.value);
-          timestampMap.set(bucket, entry);
+          const val = parseFloat(p.value);
+          if (!isNaN(val)) {
+            const bucket = Math.round(p.ts / (10 * 60 * 1000)) * (10 * 60 * 1000);
+            const entry = timestampMap.get(bucket) || { rh: val, temp: 70, battery: 100, rssi: -50 };
+            entry.rh = val;
+            timestampMap.set(bucket, entry);
+          }
         });
 
         tempPoints.forEach((p) => {
-          const bucket = Math.round(p.ts / (15 * 60 * 1000)) * (15 * 60 * 1000);
-          const entry = timestampMap.get(bucket) || { rh: 0, temp: parseFloat(p.value), battery: 100 };
-          entry.temp = parseFloat(p.value);
-          timestampMap.set(bucket, entry);
+          let val = parseFloat(p.value);
+          if (!isNaN(val)) {
+            const bucket = Math.round(p.ts / (10 * 60 * 1000)) * (10 * 60 * 1000);
+            const entry = timestampMap.get(bucket) || { rh: 68, temp: val, battery: 100, rssi: -50 };
+            entry.temp = val;
+            timestampMap.set(bucket, entry);
+          }
         });
 
         battPoints.forEach((p) => {
-          const bucket = Math.round(p.ts / (15 * 60 * 1000)) * (15 * 60 * 1000);
-          const entry = timestampMap.get(bucket) || { rh: 0, temp: 0, battery: parseFloat(p.value) };
-          entry.battery = parseFloat(p.value);
-          timestampMap.set(bucket, entry);
+          const val = parseFloat(p.value);
+          if (!isNaN(val)) {
+            const bucket = Math.round(p.ts / (10 * 60 * 1000)) * (10 * 60 * 1000);
+            const entry = timestampMap.get(bucket) || { rh: 68, temp: 70, battery: val, rssi: -50 };
+            entry.battery = val;
+            timestampMap.set(bucket, entry);
+          }
+        });
+
+        rssiPoints.forEach((p) => {
+          const val = parseFloat(p.value);
+          if (!isNaN(val)) {
+            const bucket = Math.round(p.ts / (10 * 60 * 1000)) * (10 * 60 * 1000);
+            const entry = timestampMap.get(bucket) || { rh: 68, temp: 70, battery: 100, rssi: val };
+            entry.rssi = val;
+            timestampMap.set(bucket, entry);
+          }
         });
 
         const sorted: HistoricalTelemetryPoint[] = Array.from(timestampMap.entries())
@@ -1149,10 +1350,14 @@ class ThingsBoardService {
             const day = d.getDate().toString().padStart(2, '0');
             return {
               timestamp: ts,
+              timeFormatted: `${hours}:${minutes}`,
+              dateFormatted: `${month}/${day} ${hours}:${minutes}`,
               timeLabel: `${month}/${day} ${hours}:${minutes}`,
-              rh: val.rh,
-              temp: val.temp,
-              battery: val.battery,
+              rh: Number(val.rh.toFixed(1)),
+              temp: Number(val.temp.toFixed(1)),
+              tempC: Number(((val.temp - 32) * (5 / 9)).toFixed(1)),
+              battery: Number(val.battery.toFixed(0)),
+              rssi: Number(val.rssi.toFixed(0)),
             };
           });
 

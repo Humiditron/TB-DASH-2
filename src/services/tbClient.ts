@@ -426,11 +426,23 @@ export class ThingsBoardClientService {
           deviceName: trimmedName,
         },
         body: trimmedKey ? { secretKey: trimmedKey } : undefined,
+        requestValidator: undefined,
+        responseValidator: undefined,
       };
 
       const res = await apiClaimDevice(claimData as any);
 
-      if (res.error) {
+      // Check if response indicates success despite string schema mismatch
+      let claimSuccess = false;
+      let respData = res.data;
+
+      if (res.response && res.response.status >= 200 && res.response.status < 300) {
+        claimSuccess = true;
+      } else if (!res.error) {
+        claimSuccess = true;
+      }
+
+      if (!claimSuccess) {
         const errorObj = res.error as any;
         const errorMsg =
           errorObj?.message ||
@@ -447,7 +459,7 @@ export class ThingsBoardClientService {
       logEntry.status = 'SUCCESS';
       logEntry.httpStatus = 200;
       logEntry.message = `Device "${trimmedName}" claimed successfully under customer ${this.currentUser?.customerId || 'account'}.`;
-      logEntry.responsePayload = res.data;
+      logEntry.responsePayload = respData;
       this.addClaimLog(logEntry);
 
       notificationService.notifyDeviceClaimed(trimmedName);
@@ -460,7 +472,7 @@ export class ThingsBoardClientService {
 
       return {
         success: true,
-        rawResponse: res.data,
+        rawResponse: respData,
         device: claimedDev || (refreshedDevices.length > 0 ? refreshedDevices[0] : undefined),
       };
     } catch (err: any) {
@@ -483,9 +495,13 @@ export class ThingsBoardClientService {
         path: {
           deviceName,
         },
-      });
+        requestValidator: undefined,
+        responseValidator: undefined,
+      } as any);
 
-      if (res.error) {
+      if (res.response && res.response.status >= 200 && res.response.status < 300) {
+        // Success
+      } else if (res.error) {
         const errObj = res.error as any;
         return { success: false, error: errObj?.message || 'Failed to reclaim device' };
       }

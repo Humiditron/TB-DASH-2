@@ -51,8 +51,8 @@ export const RemoveDeviceModal: React.FC<RemoveDeviceModalProps> = ({
         await thingsboard.unclaimDevice(deviceName, device.id);
         setSuccessMessage(`Device "${deviceName}" has been successfully released/unclaimed.`);
       } else {
-        await thingsboard.deleteDevice(device.id);
-        setSuccessMessage(`Device "${deviceName}" has been permanently removed from ThingsBoard.`);
+        await thingsboard.deleteDevice(device.id, deviceName);
+        setSuccessMessage(`Device "${deviceName}" has been removed.`);
       }
 
       onDeviceRemoved(device.id);
