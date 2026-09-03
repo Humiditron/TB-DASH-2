@@ -43,7 +43,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   // Synchronize OIDC auth token with ThingsBoard service
   useEffect(() => {
     if (auth.isAuthenticated && auth.user?.access_token) {
-      thingsboard.setAuthSession(auth.user.access_token, auth.user.profile);
+      thingsboard.setAuthSession(auth.user.access_token, auth.user.profile, auth.user.refresh_token);
     }
   }, [auth.isAuthenticated, auth.user]);
 

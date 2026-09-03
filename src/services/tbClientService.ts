@@ -12,6 +12,7 @@ import {
   zDevice,
 } from '@enerlab/thingsboard-client/zod';
 import { z } from 'zod';
+import { normalizeBearerToken, applyThingsBoardClientAuth } from '../utils/authTokens';
 
 export type TBClientInstance = typeof client;
 
@@ -44,18 +45,8 @@ export interface TelemetryHistoryPoint {
  */
 export function configureDefaultClient({ baseUrl, token }: ClientOptions): void {
   const cleanBaseUrl = baseUrl.replace(/\/$/, '');
-  client.setConfig({
-    baseUrl: cleanBaseUrl,
-  });
-  if (token) {
-    setupAuth(client, { mode: 'bearer', token });
-    client.setConfig({
-      headers: {
-        'X-Authorization': `Bearer ${token}`,
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  }
+  const cleanToken = normalizeBearerToken(token);
+  applyThingsBoardClientAuth(client, cleanToken, cleanBaseUrl);
 }
 
 /**
@@ -73,17 +64,13 @@ export async function loginThingsBoard(
       client: customClient as any,
     });
 
-    // Also inject redundant Authorization header for complete compatibility
-    customClient.setConfig({
-      headers: {
-        'X-Authorization': `Bearer ${authData.token}`,
-        Authorization: `Bearer ${authData.token}`,
-      },
-    });
+    const cleanToken = normalizeBearerToken(authData.token)!;
+    const cleanRefresh = normalizeBearerToken(authData.refreshToken)!;
+    applyThingsBoardClientAuth(customClient, cleanToken);
 
     return {
-      token: authData.token,
-      refreshToken: authData.refreshToken,
+      token: cleanToken,
+      refreshToken: cleanRefresh,
     };
   } catch (error: any) {
     throw new Error(error?.message || 'Authentication failed: Invalid credentials');
@@ -94,7 +81,7 @@ export async function loginThingsBoard(
  * Log out and clear session credentials
  */
 export function logoutThingsBoard(customClient: TBClientInstance = client): void {
-  logout({ client: customClient as any });
+  applyThingsBoardClientAuth(customClient, null);
 }
 
 /**
@@ -105,13 +92,8 @@ export function setManualTokenOverride(
   token: string,
   customClient: TBClientInstance = client
 ): void {
-  setupAuth(customClient as any, { mode: 'bearer', token });
-  customClient.setConfig({
-    headers: {
-      'X-Authorization': `Bearer ${token}`,
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  const cleanToken = normalizeBearerToken(token);
+  applyThingsBoardClientAuth(customClient, cleanToken);
 }
 
 /**
@@ -121,16 +103,8 @@ export function setManualTokenOverride(
 export function createIsolatedThingsBoardClient(options: ClientOptions): TBClientInstance {
   // Clone singleton configuration
   const customClient = Object.create(client) as TBClientInstance;
-  customClient.setConfig({
-    baseUrl: options.baseUrl.replace(/\/$/, ''),
-    headers: options.token
-      ? {
-          'X-Authorization': `Bearer ${options.token}`,
-          Authorization: `Bearer ${options.token}`,
-        }
-      : {},
-  });
-
+  const cleanToken = normalizeBearerToken(options.token);
+  applyThingsBoardClientAuth(customClient, cleanToken, options.baseUrl);
   return customClient;
 }
 

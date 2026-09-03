@@ -28,6 +28,15 @@ import {
 import { normalizeUrl } from '../utils/url';
 import { getEnv } from '../utils/env';
 import { apiLogger } from './apiLogger';
+import {
+  normalizeBearerToken,
+  applyThingsBoardClientAuth,
+  extractTokensFromUrl,
+  cleanUrlAfterAuth,
+  decodeJwtPayload,
+  performSilentTokenRefresh,
+} from '../utils/authTokens';
+import { registerGlobalClientInterceptors } from './apiClientInit';
 
 const CONFIG_STORAGE_KEY = 'humid1_thingsboard_config';
 const CLAIM_LOGS_STORAGE_KEY = 'humid1_tb_claim_logs';
@@ -49,6 +58,7 @@ export interface UserProfile {
 class ThingsBoardService {
   private config: ThingsBoardConfig;
   private authToken: string | null = null;
+  private refreshToken: string | null = null;
   private devices: HumidorDevice[] = [];
   private alarms: HumidorAlarm[] = [];
   private claimLogs: ClaimLogEntry[] = [];
@@ -61,7 +71,18 @@ class ThingsBoardService {
     this.purgeLegacyStorage();
     this.config = this.loadConfig();
     this.loadClaimLogs();
-    this.authToken = this.findAutomaticJwt();
+
+    // Check URL first for SSO redirects
+    const urlTokens = extractTokensFromUrl();
+    if (urlTokens.token) {
+      this.authToken = urlTokens.token;
+      this.refreshToken = urlTokens.refreshToken;
+      cleanUrlAfterAuth();
+    } else {
+      this.authToken = this.findAutomaticJwt();
+      this.refreshToken = this.getEffectiveRefreshToken();
+    }
+
     if (this.authToken) {
       this.extractProfileFromJwt(this.authToken);
     }
@@ -69,63 +90,22 @@ class ThingsBoardService {
   }
 
   /**
-   * Configure the @enerlab/thingsboard-client instance
+   * Configure the @enerlab/thingsboard-client instance with centralized interceptors
    */
   private initOpenApiClient() {
     const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
-    client.setConfig({
-      baseUrl: serverUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
+
+    // Register centralized global client interceptors (safe against duplicates)
+    registerGlobalClientInterceptors({
+      getToken: () => this.getEffectiveToken(),
+      getRefreshToken: () => this.getEffectiveRefreshToken(),
+      getServerUrl: () => (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, ''),
+      onTokenRefreshed: (token, refreshToken) => {
+        this.setAuthSession(token, undefined, refreshToken);
       },
     });
 
-    // Register request interceptor for Bearer token injection & apiLogger
-    client.interceptors.request.use((request, options) => {
-      const token = this.getEffectiveToken();
-      if (token) {
-        request.headers.set('X-Authorization', `Bearer ${token}`);
-        request.headers.set('Authorization', `Bearer ${token}`);
-      }
-
-      const txId = 'tx-' + Math.random().toString(36).substring(2, 9);
-      (request as any).__txId = txId;
-
-      let parsedBody: any = options?.body;
-      if (!parsedBody && request.body) {
-        try {
-          parsedBody = typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
-        } catch {
-          parsedBody = request.body;
-        }
-      }
-
-      apiLogger.logRequest(txId, request.method || 'GET', request.url || '', parsedBody);
-      return request;
-    });
-
-    // Register response interceptor for apiLogger
-    client.interceptors.response.use(async (response, request) => {
-      const txId = (request as any)?.__txId;
-      let responseBody: any = undefined;
-      try {
-        const clone = response.clone();
-        const text = await clone.text();
-        try {
-          responseBody = JSON.parse(text);
-        } catch {
-          responseBody = text;
-        }
-      } catch {
-        responseBody = response.body;
-      }
-
-      if (txId) {
-        apiLogger.logResponse(txId, response.status, responseBody);
-      }
-      return response;
-    });
+    applyThingsBoardClientAuth(client, this.getEffectiveToken(), serverUrl);
   }
 
   /**
@@ -251,27 +231,45 @@ class ThingsBoardService {
   /**
    * Called when Authentik OIDC authenticates or user signs in.
    */
-  public async setAuthSession(token: string | null, profile?: any): Promise<void> {
-    if (!token) {
+  public async setAuthSession(token: string | null, profile?: any, refreshToken?: string | null): Promise<void> {
+    const cleanToken = normalizeBearerToken(token);
+    const cleanRefresh = normalizeBearerToken(refreshToken);
+
+    if (!cleanToken) {
       this.authToken = null;
+      this.refreshToken = null;
       this.currentUser = null;
       this.devices = [];
       this.alarms = [];
       this.stopLivePolling();
       try {
         localStorage.removeItem('humid1_active_jwt');
+        localStorage.removeItem('humid1_active_refresh_token');
+        localStorage.removeItem('humid1_tb_jwt_token');
+        localStorage.removeItem('humid1_tb_jwt_refresh');
+        localStorage.removeItem('tb_token');
       } catch {
         // ignore
       }
+      applyThingsBoardClientAuth(client, null);
       this.notifyAuth();
       this.notifySubscribers();
       return;
     }
 
-    this.authToken = token.trim();
+    this.authToken = cleanToken;
+    if (cleanRefresh) {
+      this.refreshToken = cleanRefresh;
+    }
     this.config.isConnected = true;
     try {
       localStorage.setItem('humid1_active_jwt', this.authToken);
+      localStorage.setItem('humid1_tb_jwt_token', this.authToken);
+      localStorage.setItem('tb_token', this.authToken);
+      if (this.refreshToken) {
+        localStorage.setItem('humid1_active_refresh_token', this.refreshToken);
+        localStorage.setItem('humid1_tb_jwt_refresh', this.refreshToken);
+      }
     } catch {
       // ignore
     }
@@ -298,20 +296,17 @@ class ThingsBoardService {
   }
 
   public extractProfileFromJwt(jwtToken: string) {
-    try {
-      const payloadBase64 = jwtToken.split('.')[1];
-      if (payloadBase64) {
-        const decodedJson = JSON.parse(atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/')));
-        this.currentUser = {
-          id: decodedJson.sub || decodedJson.userId || 'authentik_user',
-          email: decodedJson.email || decodedJson.preferred_username || decodedJson.sub || 'User',
-          firstName: decodedJson.name || decodedJson.given_name || decodedJson.firstName || '',
-          lastName: decodedJson.family_name || decodedJson.lastName || '',
-          authority: decodedJson.iss?.includes('auth') ? 'AUTHENTIK_SSO' : (decodedJson.scopes?.[0] || 'CUSTOMER_USER'),
-        };
-      }
-    } catch {
-      // ignore
+    const decoded = decodeJwtPayload(jwtToken);
+    if (decoded) {
+      this.currentUser = {
+        id: (decoded.sub as string) || (decoded.userId as string) || 'authentik_user',
+        email: (decoded.email as string) || (decoded.preferred_username as string) || (decoded.sub as string) || 'User',
+        firstName: (decoded.name as string) || (decoded.given_name as string) || (decoded.firstName as string) || '',
+        lastName: (decoded.family_name as string) || (decoded.lastName as string) || '',
+        authority: typeof decoded.iss === 'string' && decoded.iss.includes('auth')
+          ? 'AUTHENTIK_SSO'
+          : ((decoded.scopes as any)?.[0] || (decoded.role as string) || 'CUSTOMER_USER'),
+      };
     }
   }
 
@@ -323,7 +318,7 @@ class ThingsBoardService {
       const res = await tbLogin(username, pass, { client: client as any });
 
       if (res && res.token) {
-        await this.setAuthSession(res.token);
+        await this.setAuthSession(res.token, undefined, res.refreshToken);
         return { success: true };
       }
 
@@ -468,17 +463,57 @@ class ThingsBoardService {
 
   public getEffectiveToken(): string | null {
     if (this.config.thingsboardToken && this.config.thingsboardToken.trim()) {
-      return this.config.thingsboardToken.trim();
+      const clean = normalizeBearerToken(this.config.thingsboardToken);
+      if (clean) return clean;
     }
     if (this.authToken && this.authToken.trim()) {
-      return this.authToken.trim();
+      const clean = normalizeBearerToken(this.authToken);
+      if (clean) return clean;
     }
     const autoToken = this.findAutomaticJwt();
     if (autoToken) {
-      this.authToken = autoToken;
-      return autoToken;
+      const clean = normalizeBearerToken(autoToken);
+      if (clean) {
+        this.authToken = clean;
+        return clean;
+      }
     }
     return null;
+  }
+
+  public getEffectiveRefreshToken(): string | null {
+    if (this.refreshToken && this.refreshToken.trim()) {
+      return normalizeBearerToken(this.refreshToken);
+    }
+    if (typeof window !== 'undefined') {
+      const stored =
+        localStorage.getItem('humid1_active_refresh_token') ||
+        localStorage.getItem('humid1_tb_jwt_refresh') ||
+        sessionStorage.getItem('humid1_active_refresh_token');
+      if (stored) {
+        return normalizeBearerToken(stored);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Silent Token Refresh
+   */
+  public async trySilentTokenRefresh(): Promise<boolean> {
+    const refresh = this.getEffectiveRefreshToken();
+    if (!refresh) return false;
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
+    try {
+      const refreshed = await performSilentTokenRefresh(serverUrl, refresh);
+      if (refreshed) {
+        await this.setAuthSession(refreshed.token, undefined, refreshed.refreshToken);
+        return true;
+      }
+    } catch (err) {
+      console.warn('[ThingsBoard] Silent token refresh failed:', err);
+    }
+    return false;
   }
 
   public initRealBackend() {

@@ -55,13 +55,25 @@ class ApiLoggerService {
     }
   }
 
-  public logRequest(id: string, method: string, url: string, requestPayload?: any): void {
+  public logRequest(
+    id: string,
+    method: string,
+    url: string,
+    requestPayload?: any,
+    authHeader?: string
+  ): void {
     const tx: ApiTransaction = {
       id,
       timestamp: Date.now(),
       method: method.toUpperCase(),
       url,
       requestPayload,
+      authHeader: authHeader
+        ? authHeader.length > 32
+          ? `${authHeader.substring(0, 16)}...${authHeader.substring(authHeader.length - 8)}`
+          : authHeader
+        : undefined,
+      hasToken: Boolean(authHeader && authHeader.trim().length > 0),
     };
     this.transactions = [tx, ...this.transactions].slice(0, MAX_LOGS);
     this.saveToStorage();
