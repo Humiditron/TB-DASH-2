@@ -221,12 +221,16 @@ class ThingsBoardService {
           window.localStorage.getItem('humid1_tb_jwt_token') || 
           window.localStorage.getItem('tb_token') ||
           window.sessionStorage.getItem('humid1_tb_jwt_token');
+
+        const fullToken = localStorage.getItem('humid1_tb_jwt_token');
+        console.log("Full TB Token:", fullToken, "Length:", fullToken?.length);
           
         if (directTbToken && directTbToken.trim() && directTbToken.includes('.')) {
           return directTbToken.trim();
         }
       } catch {
         // ignore
+        console.log("TRY, FAILED!");
       }
 
       // 1. Scan window.location query & hash for tokens passed during redirect
