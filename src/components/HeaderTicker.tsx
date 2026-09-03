@@ -81,13 +81,18 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
   const getStatusBadge = (status: HumidorDevice['status']) => {
     switch (status) {
       case 'ONLINE':
-        return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-500/30">ONLINE</span>;
+        return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-500/30">ONLINE</span>;
       case 'SLEEP':
-        return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">SLEEP</span>;
-      case 'OFFLINE':
-        return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-950/80 text-rose-400 border border-rose-500/30">OFFLINE</span>;
+        return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-amber-300 border border-slate-700">SLEEP</span>;
+      default:
+        return null;
     }
   };
+
+  // Only active (ONLINE) or SLEEP devices appear in the live telemetry reel
+  const activeOrSleepingDevices = devices.filter(
+    (d) => d.status === 'ONLINE' || d.status === 'SLEEP'
+  );
 
   return (
     <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 shadow-lg shadow-black/20">
@@ -95,16 +100,16 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
       <div className="bg-slate-950 border-b border-slate-800/60 overflow-hidden py-1.5 px-3 flex items-center relative text-xs">
         <div className="flex items-center gap-1.5 text-amber-400 font-bold uppercase tracking-wider text-[11px] pr-3 shrink-0 border-r border-slate-800 z-10 bg-slate-950">
           <span className="relative flex h-2 w-2">
-            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${devices.length > 0 ? 'bg-emerald-400' : 'bg-amber-400'} opacity-75`}></span>
-            <span className={`relative inline-flex rounded-full h-2 w-2 ${devices.length > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${activeOrSleepingDevices.length > 0 ? 'bg-emerald-400' : 'bg-amber-400'} opacity-75`}></span>
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${activeOrSleepingDevices.length > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
           </span>
-          {devices.length > 0 ? 'Live Telemetry' : 'System Ready'}
+          {activeOrSleepingDevices.length > 0 ? 'Live Telemetry' : 'System Ready'}
         </div>
 
         <div className="overflow-hidden w-full select-none">
-          {devices.length > 0 ? (
+          {activeOrSleepingDevices.length > 0 ? (
             <div className="animate-ticker flex items-center gap-6">
-              {[...devices, ...devices].map((device, idx) => {
+              {activeOrSleepingDevices.map((device) => {
                 const isSelected = device.id === selectedDeviceId;
                 const isDry = device.telemetry.rh < 65;
                 const isWet = device.telemetry.rh > 75;
@@ -112,9 +117,9 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
 
                 return (
                   <button
-                    key={`${device.id}-${idx}`}
+                    key={device.id}
                     onClick={() => onSelectDevice(device.id)}
-                    className={`inline-flex items-center gap-2.5 px-3 py-1 rounded-md transition-all text-xs font-medium cursor-pointer ${
+                    className={`inline-flex items-center gap-2.5 px-3 py-1 rounded-md transition-all text-xs font-medium cursor-pointer shrink-0 ${
                       isSelected
                         ? 'bg-amber-500/15 border border-amber-500/40 text-amber-200 shadow-sm'
                         : 'bg-slate-900/80 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white'
@@ -150,7 +155,7 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
               <span className="text-slate-500">SSO AUTHENTICATED:</span>
               <span className="text-emerald-400 font-bold">{auth.user?.profile?.email || authUsername || 'Active Session'}</span>
               <span className="text-slate-600">•</span>
-              <span>No active humidor telemetry streams detected. Claim a hardware device to start monitoring.</span>
+              <span>No active or sleeping humidor telemetry streams detected. Claim a hardware device to start monitoring.</span>
             </div>
           )}
         </div>

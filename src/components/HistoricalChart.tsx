@@ -19,7 +19,7 @@ interface HistoricalChartProps {
   tempUnit: TempUnit;
 }
 
-type TimeRange = '24h' | '7d' | '30d';
+type TimeRange = '12h' | '24h' | '3d' | '7d';
 
 export const HistoricalChart: React.FC<HistoricalChartProps> = ({
   device,
@@ -31,7 +31,8 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
   const [historyData, setHistoryData] = useState<HistoricalTelemetryPoint[]>(device.history || []);
   const [isLoading, setIsLoading] = useState(false);
 
-  const rangeHours = range === '24h' ? 24 : range === '7d' ? 168 : 720;
+  // Range hours bounded by 7-Day Server Retention Policy (SQL_DATA_RETENTION_TTL=604800s / 168h max)
+  const rangeHours = range === '12h' ? 12 : range === '24h' ? 24 : range === '3d' ? 72 : 168;
 
   const loadHistory = useCallback(async () => {
     if (!device?.id) return;
@@ -48,7 +49,7 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
         const liveBatt = device.telemetry?.battery || 100;
 
         const generated: HistoricalTelemetryPoint[] = [];
-        const count = range === '24h' ? 12 : range === '7d' ? 14 : 20;
+        const count = range === '12h' ? 12 : range === '24h' ? 16 : range === '3d' ? 20 : 28;
         const stepMs = (rangeHours * 3600 * 1000) / count;
 
         for (let i = count; i >= 0; i--) {
@@ -142,11 +143,11 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
           {/* Time range selector & Refresh */}
           <div className="flex items-center gap-2">
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-              {(['24h', '7d', '30d'] as TimeRange[]).map((r) => (
+              {(['12h', '24h', '3d', '7d'] as TimeRange[]).map((r) => (
                 <button
                   key={r}
                   onClick={() => setRange(r)}
-                  className={`px-3 py-1 rounded-lg font-medium font-mono uppercase transition-all cursor-pointer ${
+                  className={`px-2.5 sm:px-3 py-1 rounded-lg font-medium font-mono uppercase transition-all cursor-pointer ${
                     range === r
                       ? 'bg-amber-600 text-slate-950 font-bold shadow-xs'
                       : 'text-slate-400 hover:text-white'
@@ -156,6 +157,11 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
                 </button>
               ))}
             </div>
+
+            <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-mono text-slate-500 px-2 py-1 rounded bg-slate-950 border border-slate-850">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              7-Day TTL (604,800s)
+            </span>
 
             <button
               onClick={() => loadHistory()}

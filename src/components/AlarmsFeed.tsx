@@ -1,5 +1,6 @@
 import React from 'react';
 import { HumidorAlarm } from '../types';
+import { thingsboard } from '../services/thingsboard';
 import { 
   Bell, 
   AlertTriangle, 
@@ -7,8 +8,7 @@ import {
   Clock, 
   ShieldAlert, 
   Check, 
-  Trash2,
-  Radio
+  XCircle
 } from 'lucide-react';
 
 interface AlarmsFeedProps {
@@ -78,6 +78,8 @@ export const AlarmsFeed: React.FC<AlarmsFeedProps> = ({ alarms }) => {
         <div className="divide-y divide-slate-800/80 max-h-[300px] overflow-y-auto pr-1">
           {alarms.map((alarm) => {
             const isActive = alarm.status.startsWith('ACTIVE');
+            const isUnack = alarm.status.endsWith('UNACK');
+
             return (
               <div key={alarm.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -102,6 +104,28 @@ export const AlarmsFeed: React.FC<AlarmsFeedProps> = ({ alarms }) => {
                   >
                     {alarm.status}
                   </span>
+
+                  {isUnack && (
+                    <button
+                      onClick={() => thingsboard.acknowledgeAlarm(alarm.id)}
+                      title="Acknowledge Alarm"
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-mono flex items-center gap-1 transition cursor-pointer border border-slate-700"
+                    >
+                      <Check className="w-3 h-3 text-emerald-400" />
+                      <span>Ack</span>
+                    </button>
+                  )}
+
+                  {isActive && (
+                    <button
+                      onClick={() => thingsboard.clearAlarm(alarm.id)}
+                      title="Clear Alarm"
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-mono flex items-center gap-1 transition cursor-pointer border border-slate-700"
+                    >
+                      <XCircle className="w-3 h-3 text-rose-400" />
+                      <span>Clear</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );

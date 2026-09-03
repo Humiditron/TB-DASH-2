@@ -30,10 +30,10 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
     return { color: 'text-rose-400', label: 'Weak' };
   };
 
-  // Build repeated device items to ensure seamless infinite looping marquee
-  // If devices array is small, duplicate multiple times so track is wide enough
-  const repeatCount = Math.max(2, Math.ceil(6 / Math.max(1, devices.length)));
-  const repeatedDevices = Array.from({ length: repeatCount * 2 }, () => devices).flat();
+  // Filter to only active (ONLINE) or SLEEP devices in the reel
+  const validDevices = devices.filter(
+    (d) => d.status === 'ONLINE' || d.status === 'SLEEP'
+  );
 
   return (
     <div
@@ -61,10 +61,10 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
 
         {/* Continuous Auto-Scrolling Marquee Track */}
         <div className="flex-1 overflow-hidden relative">
-          {devices.length === 0 ? (
+          {validDevices.length === 0 ? (
             <div className="flex items-center px-4 text-[11px] font-mono text-slate-400 gap-3">
-              <span className="text-amber-400 font-bold">AWAITING HARDWARE:</span>
-              <span>No physical humidor units currently claimed. Open Claiming Hub to bind your ESP32 device.</span>
+              <span className="text-amber-400 font-bold">TELEMETRY IDLE:</span>
+              <span>No active or sleeping humidor hardware currently transmitting.</span>
             </div>
           ) : (
             <div
@@ -72,18 +72,17 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
                 isPaused ? 'ticker-paused' : ''
               }`}
             >
-              {repeatedDevices.map((device, idx) => {
+              {validDevices.map((device) => {
                 const isSelected = device.id === selectedDeviceId;
                 const isRhSafe = device.telemetry.rh >= 65 && device.telemetry.rh <= 75;
                 const isTempSafe = device.telemetry.temp <= 75.0;
                 const isBatteryLow = device.telemetry.battery < 20;
-                const isOffline = device.status === 'OFFLINE';
                 const rssiInfo = getRssiQuality(device.telemetry.rssi);
 
               return (
                 <button
-                  key={`${device.id}-loop-${idx}`}
-                  id={`ticker-chip-${device.id}-${idx}`}
+                  key={device.id}
+                  id={`ticker-chip-${device.id}`}
                   onClick={() => onSelectDevice(device.id)}
                   className={`flex items-center gap-2.5 px-3 py-1 rounded-lg transition-all shrink-0 border text-left cursor-pointer ${
                     isSelected
@@ -91,21 +90,20 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
                       : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:bg-slate-850 hover:border-slate-700'
                   }`}
                 >
-                  {/* Status Indicator */}
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        isOffline
-                          ? 'bg-slate-500'
-                          : device.status === 'SLEEP'
-                          ? 'bg-amber-400'
-                          : 'bg-emerald-400 animate-pulse-subtle'
-                      }`}
-                    />
-                    <span className="font-semibold text-slate-200 tracking-tight whitespace-nowrap text-[11px]">
-                      {device.name}
-                    </span>
-                  </div>
+                  {/* Single Status Indicator Badge */}
+                  <span
+                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase ${
+                      device.status === 'SLEEP'
+                        ? 'bg-amber-950/60 text-amber-300 border border-amber-800/40'
+                        : 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/40'
+                    }`}
+                  >
+                    {device.status}
+                  </span>
+
+                  <span className="font-semibold text-slate-200 tracking-tight whitespace-nowrap text-[11px]">
+                    {device.name}
+                  </span>
 
                   <div className="h-3 w-px bg-slate-800" />
 
@@ -114,9 +112,7 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
                     <span className="text-slate-400 text-[10px]">RH:</span>
                     <span
                       className={`font-semibold ${
-                        isOffline
-                          ? 'text-slate-400'
-                          : isRhSafe
+                        isRhSafe
                           ? 'text-emerald-400'
                           : device.telemetry.rh < 65
                           ? 'text-sky-400'
@@ -132,9 +128,7 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
                     <span className="text-slate-400 text-[10px]">T:</span>
                     <span
                       className={`font-semibold ${
-                        isOffline
-                          ? 'text-slate-400'
-                          : isTempSafe
+                        isTempSafe
                           ? 'text-slate-200'
                           : 'text-amber-400'
                       }`}
@@ -153,25 +147,8 @@ export const NewsTicker: React.FC<NewsTickerProps> = ({
 
                   {/* RSSI Meter */}
                   <div className="flex items-center" title={`RSSI: ${device.telemetry.rssi} dBm (${rssiInfo.label})`}>
-                    {isOffline ? (
-                      <WifiOff className="w-3.5 h-3.5 text-slate-500" />
-                    ) : (
-                      <Wifi className={`w-3.5 h-3.5 ${rssiInfo.color}`} />
-                    )}
+                    <Wifi className={`w-3.5 h-3.5 ${rssiInfo.color}`} />
                   </div>
-
-                  {/* Status pill badge */}
-                  <span
-                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase ${
-                      isOffline
-                        ? 'bg-slate-800 text-slate-400'
-                        : device.status === 'SLEEP'
-                        ? 'bg-amber-950/60 text-amber-300 border border-amber-800/40'
-                        : 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/40'
-                    }`}
-                  >
-                    {device.status}
-                  </span>
                 </button>
               );
             })}

@@ -1411,6 +1411,72 @@ class ThingsBoardService {
   }
 
   /**
+   * Send RPC Command to Hardware Device via ThingsBoard REST API
+   * Supports both one-way fire-and-forget and two-way request-response RPCs.
+   */
+  public async sendRpcCommand(
+    deviceId: string,
+    method: string,
+    params: any = {},
+    twoWay: boolean = true,
+    timeoutMs: number = 5000
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const token = this.getEffectiveToken();
+    const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
+    if (!token) {
+      throw new Error('Not connected to ThingsBoard. Valid authentication token required.');
+    }
+
+    const rpcEndpoint = twoWay
+      ? `${serverUrl}/api/plugins/rpc/twoway/${deviceId}`
+      : `${serverUrl}/api/plugins/rpc/oneway/${deviceId}`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs + 2000);
+
+      const res = await fetch(rpcEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          method,
+          params,
+          timeout: timeoutMs,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        let respJson = null;
+        try {
+          respJson = await res.json();
+        } catch {
+          // empty or non-json response
+        }
+        return { success: true, data: respJson };
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errJson.message || `RPC execution failed with HTTP ${res.status}`,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.name === 'AbortError' ? 'RPC Request Timed Out (Device sleeping or offline)' : (err.message || 'RPC communication error'),
+      };
+    }
+  }
+
+  /**
    * Acknowledge alarm via /src_lib/client apiAckAlarm
    */
   public acknowledgeAlarm(alarmId: string) {
