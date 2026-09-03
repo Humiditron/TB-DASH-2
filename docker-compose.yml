@@ -15,9 +15,12 @@ services:
       - DASHBOARD_URL=https://dash.humid1.com
       - THINGSBOARD_SERVER_URL=https://app.humid1.com
       - AUTHENTIK_URL=https://auth.humid1.com
+      - AUTHENTIK_SLUG=humid1-dash
+      - AUTHENTIK_CLIENT_ID=7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI
       - CAPTCHA_URL=https://cap.humid1.com
       - CHAT_URL=https://chat.humid1.com
-      - SSO_AUTH_ENDPOINT=https://app.humid1.com/oauth2/authorization/authentik
+      - SSO_AUTH_ENDPOINT=https://app.humid1.com/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365
+      - DEFAULT_DEVICE_NAME=HUMID1-CABINET-01
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/healthz"]
       interval: 30s

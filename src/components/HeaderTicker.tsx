@@ -4,6 +4,7 @@ import { HumidorDevice, TempUnit } from '../types';
 import { UserProfile, thingsboard } from '../services/thingsboard';
 import { getSafeHost } from '../utils/url';
 import { getEnv } from '../utils/env';
+import { APP_CONFIG } from '../config/env';
 import { 
   Battery, 
   Plus, 
@@ -14,7 +15,9 @@ import {
   User, 
   LogIn, 
   LogOut,
-  Terminal
+  Terminal,
+  Info,
+  AlertTriangle
 } from 'lucide-react';
 
 interface HeaderTickerProps {
@@ -28,6 +31,8 @@ interface HeaderTickerProps {
   onOpenAlarmsModal: () => void;
   onOpenAuthModal: () => void;
   onOpenApiInspector: () => void;
+  onOpenAboutModal: () => void;
+  onOpenDevWarning: () => void;
   activeAlarmCount: number;
   currentUser: UserProfile | null;
   isDemoMode: boolean;
@@ -44,6 +49,8 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
   onOpenAlarmsModal,
   onOpenAuthModal,
   onOpenApiInspector,
+  onOpenAboutModal,
+  onOpenDevWarning,
   activeAlarmCount,
   currentUser,
   isDemoMode,
@@ -165,15 +172,31 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Brand & Identity */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 via-amber-700 to-amber-900 flex items-center justify-center shadow-md shadow-amber-950/40 border border-amber-500/30">
+          <button
+            onClick={onOpenAboutModal}
+            className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 via-amber-700 to-amber-900 flex items-center justify-center shadow-md shadow-amber-950/40 border border-amber-500/30 hover:scale-105 transition cursor-pointer"
+            title="About HUMID1_OS Dashboard"
+          >
             <Flame className="w-5 h-5 text-amber-200" />
-          </div>
+          </button>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-display font-bold text-lg text-amber-100 tracking-wider">
+              <button
+                onClick={onOpenAboutModal}
+                className="font-display font-bold text-lg text-amber-100 tracking-wider hover:text-amber-200 transition text-left cursor-pointer"
+                title="View About & System Specs"
+              >
                 {getEnv('VITE_APP_TITLE', 'HUMID1_OS')}
-              </span>
-              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 flex items-center gap-1">
+              </button>
+              <button
+                onClick={onOpenDevWarning}
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 transition cursor-pointer"
+                title="Dashboard Under Active Development - Click to view notice"
+              >
+                <AlertTriangle className="w-2.5 h-2.5 text-amber-400" />
+                <span>v{APP_CONFIG.version} (Dev)</span>
+              </button>
+              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 hidden sm:flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3 text-emerald-400" />
                 SSO Active
               </span>
@@ -185,7 +208,18 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
         </div>
 
         {/* Center / Right Controls */}
-        <div className="flex items-center gap-2.5 sm:gap-3.5">
+        <div className="flex items-center gap-2 sm:gap-2.5">
+          {/* About Badge Button */}
+          <button
+            id="open-about-modal-btn"
+            onClick={onOpenAboutModal}
+            className="p-2 rounded-lg bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-slate-300 hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1 text-xs font-mono"
+            title="About Dashboard, Authors, Contributors & Specs"
+          >
+            <Info className="w-4 h-4 text-amber-400" />
+            <span className="hidden lg:inline">About</span>
+          </button>
+
           {/* Quick Unit Switcher */}
           <button
             onClick={onToggleTempUnit}

@@ -24,7 +24,7 @@ import {
 interface ServerConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenDiagnostics?: (tab?: 'logs' | 'token' | 'guide') => void;
+  onOpenDiagnostics?: (tab?: 'logs' | 'token') => void;
 }
 
 export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
@@ -148,15 +148,6 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
                 ThingsBoard API Access Token (JWT Override)
               </label>
-              {onOpenDiagnostics && (
-                <button
-                  type="button"
-                  onClick={() => onOpenDiagnostics('guide')}
-                  className="text-[11px] text-amber-400 hover:text-amber-300 underline font-mono flex items-center gap-1 cursor-pointer"
-                >
-                  How to find token?
-                </button>
-              )}
             </div>
             <div className="relative">
               <input

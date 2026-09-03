@@ -11,15 +11,11 @@ import {
   CheckCircle2,
   AlertCircle,
   Key,
-  Compass,
   Zap,
   Play,
   Loader2,
-  ExternalLink,
   ShieldAlert,
   ShieldCheck,
-  Info,
-  RefreshCw,
 } from 'lucide-react';
 import { ApiTransaction } from '../types';
 import { apiLogger } from '../services/apiLogger';
@@ -34,7 +30,7 @@ import {
 interface ApiInspectorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  initialTab?: 'logs' | 'token' | 'guide';
+  initialTab?: 'logs' | 'token';
 }
 
 export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
@@ -42,7 +38,7 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
   onClose,
   initialTab = 'logs',
 }) => {
-  const [activeTab, setActiveTab] = useState<'logs' | 'token' | 'guide'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'logs' | 'token'>(initialTab);
   const [transactions, setTransactions] = useState<ApiTransaction[]>([]);
   const [filterMethod, setFilterMethod] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -189,10 +185,6 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
     setTimeout(() => setActivationFeedback(null), 3500);
   };
 
-  // Snippets for user guide
-  const consoleSnippet = `copy(localStorage.getItem('jwt_token'));`;
-  const returnBridgeSnippet = `location.href = 'https://dash.humid1.com/?token=' + localStorage.getItem('jwt_token') + '&refreshToken=' + (localStorage.getItem('refresh_token') || '');`;
-
   return (
     <div
       id="api-inspector-modal"
@@ -210,7 +202,7 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
                 Live Diagnostics, Logs & Token Inspector
               </h3>
               <p className="text-xs text-slate-400">
-                Monitor REST API transactions, inspect token claims, and resolve 401 authentication issues
+                Monitor REST API transactions, inspect token claims, and debug ThingsBoard IoT requests
               </p>
             </div>
           </div>
@@ -263,21 +255,6 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
             ) : (
               <span className="w-2 h-2 rounded-full bg-rose-400"></span>
             )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('guide')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-bold border-b-2 transition cursor-pointer ${
-              activeTab === 'guide'
-                ? 'border-amber-400 text-amber-400 bg-amber-500/5'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Compass className="w-4 h-4" />
-            <span>Token Finder & Quick Bridge</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800/60 font-semibold">
-              Help
-            </span>
           </button>
         </div>
 
@@ -617,10 +594,10 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
                     <div className="p-3.5 rounded-xl bg-amber-950/60 border border-amber-800/60 text-amber-200 text-xs space-y-1">
                       <div className="font-bold flex items-center gap-1.5 text-amber-300">
                         <AlertCircle className="w-4 h-4 shrink-0" />
-                        <span>Why this token causes 401 Unauthorized:</span>
+                        <span>Token Authentication Notice:</span>
                       </div>
                       <p className="text-[11px] leading-relaxed text-amber-200/90">
-                        This token was issued by <code className="text-amber-100 font-mono">auth.humid1.com</code> (Authentik). ThingsBoard’s security filter cannot verify Authentik tokens and requires its own JWT issued by ThingsBoard. Check the <strong>"Token Finder & Quick Bridge"</strong> tab to retrieve your native ThingsBoard token.
+                        This token was issued by <code className="text-amber-100 font-mono">auth.humid1.com</code> (Authentik). ThingsBoard’s security filter validates requests using its native JWT session issued by ThingsBoard.
                       </p>
                     </div>
                   )}
@@ -759,138 +736,8 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
             </div>
           </div>
         )}
-
-        {/* TAB 3: TOKEN FINDER & QUICK BRIDGE GUIDE */}
-        {activeTab === 'guide' && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-950/40">
-            {/* Core Explanation */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  <Info className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-slate-100 text-sm">
-                    Why Authentik Accounts Fail with REST Login (And How To Fix It)
-                  </h4>
-                  <p className="text-xs text-slate-400">
-                    Understanding ThingsBoard OAuth2 auto-provisioning vs REST API credentials
-                  </p>
-                </div>
-              </div>
-
-              <div className="text-xs text-slate-300 space-y-2.5 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800">
-                <p>
-                  When you sign in to ThingsBoard using Authentik SSO, ThingsBoard auto-provisions your user account in its database. However:
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-slate-300 pl-1 font-mono text-[11px]">
-                  <li>ThingsBoard <strong>does not create a local password</strong> for SSO-provisioned accounts.</li>
-                  <li>Calling the REST API <code className="text-amber-400">/api/auth/login</code> with username/password tests local credentials, returning <code className="text-rose-400">401 Invalid username or password</code>.</li>
-                  <li>Injecting Authentik OIDC tokens directly into ThingsBoard fails because ThingsBoard signs and validates tokens using its own internal secret key.</li>
-                </ul>
-                <p className="pt-1 text-amber-300 font-semibold">
-                  The good news: If you have ThingsBoard open in another tab (<code className="text-amber-200">https://app.humid1.com</code>), your valid ThingsBoard token is ALREADY there! You can grab it in seconds using either method below.
-                </p>
-              </div>
-            </div>
-
-            {/* METHOD 1: 1-Click Console Snippet */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 font-bold text-xs flex items-center justify-center">
-                    1
-                  </span>
-                  <h5 className="font-bold text-slate-100 text-xs uppercase tracking-wider">
-                    Method A: 1-Line Browser Console Command (Fastest)
-                  </h5>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(consoleSnippet, 'snippet_console')}
-                  className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  {copiedSnippet === 'snippet_console' ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  <span>{copiedSnippet === 'snippet_console' ? 'Copied Command!' : 'Copy Command'}</span>
-                </button>
-              </div>
-
-              <div className="space-y-2 text-xs text-slate-300">
-                <p>1. Switch to your open <strong>ThingsBoard tab</strong> (<a href="https://app.humid1.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline inline-flex items-center gap-0.5">https://app.humid1.com <ExternalLink className="w-3 h-3" /></a>).</p>
-                <p>2. Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700 font-mono text-[11px]">F12</kbd> (or right click → <em>Inspect</em>) and click the <strong>Console</strong> tab.</p>
-                <p>3. Paste this 1-line command and hit <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700 font-mono text-[11px]">Enter</kbd>:</p>
-                
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-amber-300 flex items-center justify-between">
-                  <code>{consoleSnippet}</code>
-                  <span className="text-[11px] text-slate-500 font-sans">Copies token directly to your clipboard</span>
-                </div>
-
-                <p>4. Return to this dashboard, go to the <strong>Token Diagnostics</strong> tab (or the login screen), paste the token, and click <strong>Activate</strong>!</p>
-              </div>
-            </div>
-
-            {/* METHOD 2: 1-Click Instant Return Bridge */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-xs flex items-center justify-center">
-                    2
-                  </span>
-                  <h5 className="font-bold text-slate-100 text-xs uppercase tracking-wider">
-                    Method B: 1-Click Return Bridge (Automated Redirect)
-                  </h5>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(returnBridgeSnippet, 'snippet_bridge')}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  {copiedSnippet === 'snippet_bridge' ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  <span>{copiedSnippet === 'snippet_bridge' ? 'Copied Script!' : 'Copy Return Script'}</span>
-                </button>
-              </div>
-
-              <div className="space-y-2 text-xs text-slate-300">
-                <p>Run this snippet in the Console on <code className="text-amber-400 font-mono">https://app.humid1.com</code> to immediately redirect you back to this dashboard with both your <strong>Access Token</strong> and <strong>Refresh Token</strong> attached in the URL:</p>
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-emerald-300 overflow-x-auto">
-                  <code>{returnBridgeSnippet}</code>
-                </div>
-                <p className="text-slate-400 text-[11px]">
-                  This dashboard automatically extracts the tokens from the URL parameters, activates your session, and saves the refresh token for silent background renewal.
-                </p>
-              </div>
-            </div>
-
-            {/* METHOD 3: Set Password for Permanent REST Login */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-sky-500/20 text-sky-400 font-bold text-xs flex items-center justify-center">
-                  3
-                </span>
-                <h5 className="font-bold text-slate-100 text-xs uppercase tracking-wider">
-                  Method C: Set a ThingsBoard Password (For Permanent Username/Password Login)
-                </h5>
-              </div>
-
-              <div className="space-y-2 text-xs text-slate-300">
-                <p>If you prefer standard username/password login without tokens:</p>
-                <ol className="list-decimal list-inside space-y-1 text-slate-300 pl-1 font-mono text-[11px]">
-                  <li>In ThingsBoard (<code className="text-amber-300">https://app.humid1.com</code>), click your user profile avatar in the top right.</li>
-                  <li>Click <strong>Profile</strong> or as Tenant Admin go to <strong>Users</strong> → click your user account.</li>
-                  <li>Click <strong>Change Password</strong> or <strong>Reset Password / Copy Activation Link</strong>.</li>
-                  <li>Set your password. Once set, you can log in with your email/username & password directly in HUMID1_OS Dashboard anytime!</li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 };
+

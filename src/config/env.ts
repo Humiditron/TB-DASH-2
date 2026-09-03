@@ -1,6 +1,8 @@
+import { getEnv } from '../utils/env';
+
 /**
  * HUMID1 Stack Environment & Domain Aggregator
- * Supports runtime hotloading via window.__HUMID1_CONFIG__ (Docker container env injection)
+ * Supports runtime hotloading via window.__HUMID1_CONFIG__ and window.__ENV__ (Docker container env injection)
  * with graceful fallback to Vite build-time env vars and production domain defaults.
  */
 
@@ -23,82 +25,26 @@ export interface Humid1Config {
   version: string;
 }
 
-declare global {
-  interface Window {
-    __HUMID1_CONFIG__?: Partial<Humid1DomainMap> & {
-      THINGSBOARD_SERVER_URL?: string;
-      AUTHENTIK_URL?: string;
-      AUTHENTIK_SLUG?: string;
-      AUTHENTIK_CLIENT_ID?: string;
-      CAPTCHA_URL?: string;
-      CHAT_URL?: string;
-      DASHBOARD_URL?: string;
-      SSO_AUTH_ENDPOINT?: string;
-    };
-  }
-}
-
-function resolveEnv(key: string, viteFallback: string, hardcodedDefault: string): string {
-  if (typeof window !== 'undefined' && window.__HUMID1_CONFIG__) {
-    const runtimeVal = (window.__HUMID1_CONFIG__ as any)[key];
-    if (runtimeVal && typeof runtimeVal === 'string' && !runtimeVal.startsWith('__')) {
-      return runtimeVal.replace(/\/+$/, '');
-    }
-  }
-  if (viteFallback && !viteFallback.startsWith('__')) {
-    return viteFallback.replace(/\/+$/, '');
-  }
-  return hardcodedDefault.replace(/\/+$/, '');
-}
-
 export const APP_CONFIG: Humid1Config = {
   domains: {
-    dashboardUrl: resolveEnv(
-      'DASHBOARD_URL',
-      import.meta.env.VITE_DASHBOARD_URL || '',
-      'https://dash.humid1.com'
-    ),
-    thingsboardUrl: resolveEnv(
-      'THINGSBOARD_SERVER_URL',
-      import.meta.env.VITE_THINGSBOARD_SERVER_URL || '',
-      'https://app.humid1.com'
-    ),
-    authentikUrl: resolveEnv(
-      'AUTHENTIK_URL',
-      import.meta.env.VITE_AUTHENTIK_URL || '',
-      'https://auth.humid1.com'
-    ),
-    captchaUrl: resolveEnv(
-      'CAPTCHA_URL',
-      import.meta.env.VITE_CAPTCHA_URL || '',
-      'https://cap.humid1.com'
-    ),
-    chatUrl: resolveEnv(
-      'CHAT_URL',
-      import.meta.env.VITE_CHAT_URL || '',
-      'https://chat.humid1.com'
-    ),
+    dashboardUrl: getEnv('VITE_DASHBOARD_URL', 'https://dash.humid1.com').replace(/\/+$/, ''),
+    thingsboardUrl: getEnv('VITE_THINGSBOARD_SERVER_URL', 'https://app.humid1.com').replace(/\/+$/, ''),
+    authentikUrl: getEnv('VITE_AUTHENTIK_URL', 'https://auth.humid1.com').replace(/\/+$/, ''),
+    captchaUrl: getEnv('VITE_CAPTCHA_URL', 'https://cap.humid1.com').replace(/\/+$/, ''),
+    chatUrl: getEnv('VITE_CHAT_URL', 'https://chat.humid1.com').replace(/\/+$/, ''),
   },
-  authentikSlug: resolveEnv(
-    'AUTHENTIK_SLUG',
-    import.meta.env.VITE_AUTHENTIK_SLUG || '',
-    'humid1-dash'
-  ),
-  authentikClientId: resolveEnv(
-    'AUTHENTIK_CLIENT_ID',
-    import.meta.env.VITE_AUTHENTIK_CLIENT_ID || '',
-    '7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI'
-  ),
-  ssoAuthorizationEndpoint: resolveEnv(
-    'SSO_AUTH_ENDPOINT',
-    import.meta.env.VITE_SSO_AUTH_ENDPOINT || '',
+  authentikSlug: getEnv('VITE_AUTHENTIK_APP_SLUG', getEnv('VITE_AUTHENTIK_SLUG', 'humid1-dash')),
+  authentikClientId: getEnv('VITE_AUTHENTIK_CLIENT_ID', '7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI'),
+  ssoAuthorizationEndpoint: getEnv(
+    'VITE_SSO_AUTH_ENDPOINT',
     'https://app.humid1.com/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365'
   ),
   thingsboardOAuthProviderPath: '/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365',
-  defaultDeviceName: import.meta.env.VITE_DEFAULT_DEVICE_NAME || 'HUMID1-CABINET-01',
+  defaultDeviceName: getEnv('VITE_DEFAULT_DEVICE_NAME', 'HUMID1-CABINET-01'),
   isSimulatedDefault: false,
-  version: '1.2.0',
+  version: '1.2.0-beta',
 };
+
 
 const STORAGE_KEY_AUTHENTIK_SLUG = 'humid1_authentik_slug';
 

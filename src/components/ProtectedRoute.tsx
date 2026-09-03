@@ -35,7 +35,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showDirectLogin, setShowDirectLogin] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [diagnosticsTab, setDiagnosticsTab] = useState<'logs' | 'token' | 'guide'>('logs');
+  const [diagnosticsTab, setDiagnosticsTab] = useState<'logs' | 'token'>('logs');
   const [txCount, setTxCount] = useState(0);
 
   // Direct login form state
@@ -83,7 +83,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     return unsub;
   }, []);
 
-  const openDiagnosticsModal = (tab: 'logs' | 'token' | 'guide' = 'logs') => {
+  const openDiagnosticsModal = (tab: 'logs' | 'token' = 'logs') => {
     setDiagnosticsTab(tab);
     setShowDiagnostics(true);
   };
@@ -131,12 +131,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     if (res.success && res.data?.token) {
       await thingsboard.setAuthSession(res.data.token, undefined, res.data.refreshToken);
     } else {
-      const isAutoProvisionedHint =
-        res.status === 401
-          ? ' Note: Accounts auto-provisioned via Authentik SSO do not have a local ThingsBoard password. Use "Token Finder & Quick Bridge" to grab your active ThingsBoard token in 5 seconds.'
-          : '';
       setLoginError(
-        `Login failed (${res.status}): ${res.error || 'Invalid credentials.'}${isAutoProvisionedHint}`
+        `Login failed (${res.status}): ${res.error || 'Invalid credentials. Please verify your ThingsBoard username and password.'}`
       );
     }
   };
@@ -150,12 +146,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     }
     if (isAuthentikOidcToken(clean)) {
       setLoginError(
-        '⚠️ Detected Authentik OIDC token (issued by auth.humid1.com). ThingsBoard API rejects external OIDC tokens with 401 Unauthorized. Open "Token Finder" to get your valid ThingsBoard token.'
+        '⚠️ Detected Authentik OIDC token (issued by auth.humid1.com). ThingsBoard API requires a native ThingsBoard JWT token.'
       );
       return;
     }
     thingsboard.setAuthSession(clean);
   };
+
 
   const isUserAuthenticated = Boolean(auth.isAuthenticated || activeToken);
 
@@ -201,15 +198,6 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
           <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-amber-300 border border-slate-700">
             {txCount}
           </span>
-        </button>
-
-        <button
-          onClick={() => openDiagnosticsModal('guide')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition shadow-lg cursor-pointer"
-          title="Find your ThingsBoard token"
-        >
-          <HelpCircle className="w-4 h-4" />
-          <span className="hidden sm:inline">Token Finder</span>
         </button>
 
         <button
@@ -263,13 +251,6 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
                 className="text-[11px] text-amber-300 hover:text-amber-200 underline font-mono flex items-center gap-1 cursor-pointer"
               >
                 <Terminal className="w-3 h-3" /> View Request Log
-              </button>
-              <button
-                type="button"
-                onClick={() => openDiagnosticsModal('guide')}
-                className="text-[11px] text-amber-300 hover:text-amber-200 underline font-mono flex items-center gap-1 cursor-pointer"
-              >
-                <HelpCircle className="w-3 h-3" /> How to get Token
               </button>
             </div>
           </div>
@@ -399,13 +380,6 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
                   <label className="block text-[10px] font-mono uppercase tracking-wider text-slate-400">
                     Paste Raw ThingsBoard JWT
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => openDiagnosticsModal('guide')}
-                    className="text-[10px] text-amber-400 hover:text-amber-300 underline font-mono flex items-center gap-0.5 cursor-pointer"
-                  >
-                    How to find?
-                  </button>
                 </div>
                 <form onSubmit={handleDirectTokenSubmit} className="flex gap-2">
                   <input

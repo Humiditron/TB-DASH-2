@@ -15,9 +15,11 @@ import { AuthModal } from './components/AuthModal';
 import { ApiInspectorModal } from './components/ApiInspectorModal';
 import { RemoveDeviceModal } from './components/RemoveDeviceModal';
 import { HumidorTelemetryWidget } from './components/HumidorTelemetryWidget';
+import { DevelopmentWarningModal } from './components/DevelopmentWarningModal';
+import { AboutModal } from './components/AboutModal';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
-import { Flame, Cpu } from 'lucide-react';
+import { Flame, Cpu, Info, AlertTriangle } from 'lucide-react';
 
 export default function App() {
   const auth = useAuth();
@@ -30,10 +32,24 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isApiInspectorOpen, setIsApiInspectorOpen] = useState(false);
   const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
+  const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
+  const [isDevWarningOpen, setIsDevWarningOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
   const appDesc = getEnv('VITE_APP_DESCRIPTION', 'Precision Humidor Monitoring & Telemetry Stack');
+
+  // Check on startup if dev warning was dismissed
+  useEffect(() => {
+    try {
+      const dismissed = localStorage.getItem('humid1_dev_warning_dismissed');
+      if (dismissed !== 'true') {
+        setIsDevWarningOpen(true);
+      }
+    } catch {
+      setIsDevWarningOpen(true);
+    }
+  }, []);
 
   // Synchronize Authentik OIDC profile without overwriting native ThingsBoard session
   useEffect(() => {
@@ -105,6 +121,8 @@ export default function App() {
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onOpenClaimModal={() => setIsClaimModalOpen(true)}
           onOpenApiInspector={() => setIsApiInspectorOpen(true)}
+          onOpenAboutModal={() => setIsAboutModalOpen(true)}
+          onOpenDevWarning={() => setIsDevWarningOpen(true)}
           onOpenAlarmsModal={() => {
             const el = document.getElementById('alarms-feed-section');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -182,17 +200,36 @@ export default function App() {
         </main>
 
         {/* Footer */}
-        <footer className="border-t border-slate-800/80 bg-slate-950/80 py-6 text-xs text-slate-500 text-center">
+        <footer className="border-t border-slate-800/80 bg-slate-950/80 py-6 text-xs text-slate-500">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Flame className="w-4 h-4 text-amber-500" />
-              <span className="font-display font-semibold text-slate-300">{appTitle}</span>
+              <button
+                onClick={() => setIsAboutModalOpen(true)}
+                className="font-display font-semibold text-slate-300 hover:text-amber-300 transition cursor-pointer"
+              >
+                {appTitle}
+              </button>
               <span>— {appDesc}</span>
             </div>
             <div className="flex items-center gap-4 text-[11px] font-mono">
-              <span>ThingsBoard IoT Integration</span>
+              <button
+                onClick={() => setIsDevWarningOpen(true)}
+                className="text-amber-400/90 hover:text-amber-300 flex items-center gap-1 cursor-pointer transition"
+              >
+                <AlertTriangle className="w-3 h-3 text-amber-400" />
+                <span>Dev Preview Notice</span>
+              </button>
               <span>•</span>
-              <span>Authentik SSO (2FA)</span>
+              <button
+                onClick={() => setIsAboutModalOpen(true)}
+                className="hover:text-slate-300 flex items-center gap-1 cursor-pointer transition"
+              >
+                <Info className="w-3 h-3" />
+                <span>About &amp; Specs</span>
+              </button>
+              <span>•</span>
+              <span>ThingsBoard CE</span>
             </div>
           </div>
         </footer>
@@ -215,6 +252,15 @@ export default function App() {
         />
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
         <ApiInspectorModal isOpen={isApiInspectorOpen} onClose={() => setIsApiInspectorOpen(false)} />
+        <DevelopmentWarningModal
+          isOpen={isDevWarningOpen}
+          onClose={() => setIsDevWarningOpen(false)}
+        />
+        <AboutModal
+          isOpen={isAboutModalOpen}
+          onClose={() => setIsAboutModalOpen(false)}
+          onOpenDevWarning={() => setIsDevWarningOpen(true)}
+        />
         <RemoveDeviceModal
           isOpen={isRemoveModalOpen}
           onClose={() => setIsRemoveModalOpen(false)}
@@ -232,3 +278,4 @@ export default function App() {
 }
 
 export { App };
+
