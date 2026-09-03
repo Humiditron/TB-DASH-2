@@ -202,7 +202,14 @@ export default function App() {
             setSelectedDeviceId(newId);
           }}
         />
-        <ServerConfigModal isOpen={isConfigModalOpen} onClose={() => setIsConfigModalOpen(false)} />
+        <ServerConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          onOpenDiagnostics={() => {
+            setIsConfigModalOpen(false);
+            setIsApiInspectorOpen(true);
+          }}
+        />
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
         <ApiInspectorModal isOpen={isApiInspectorOpen} onClose={() => setIsApiInspectorOpen(false)} />
       </div>

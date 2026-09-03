@@ -28,6 +28,7 @@ import {
   getCurrentReturnUrl,
 } from '../config/env';
 import { EcosystemModal } from './EcosystemModal';
+import { ApiInspectorModal } from './ApiInspectorModal';
 import { isAuthentikOidcToken } from '../utils/authTokens';
 
 interface AuthScreenProps {
@@ -56,6 +57,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [showDirectToken, setShowDirectToken] = useState(false);
   const [showAdvancedSso, setShowAdvancedSso] = useState(false);
   const [isEcosystemOpen, setIsEcosystemOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [diagnosticsTab, setDiagnosticsTab] = useState<'logs' | 'token' | 'guide'>('logs');
 
   useEffect(() => {
     // 1. Immediately check if URL contains SSO token callback
@@ -201,7 +204,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           className="flex items-center gap-1.5 text-slate-400 hover:text-amber-400 transition cursor-pointer bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800"
         >
           <Layers className="w-3.5 h-3.5 text-amber-400" />
-          <span className="font-mono text-[11px]">System Topology & Services</span>
+          <span className="font-mono text-[11px]">System Topology</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setDiagnosticsTab('logs');
+            setIsDiagnosticsOpen(true);
+          }}
+          className="flex items-center gap-1.5 text-slate-400 hover:text-amber-400 transition cursor-pointer bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800"
+        >
+          <Terminal className="w-3.5 h-3.5 text-amber-400" />
+          <span className="font-mono text-[11px]">Logs & Diagnostics</span>
         </button>
 
         <a
@@ -211,7 +226,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           className="flex items-center gap-1.5 text-slate-400 hover:text-amber-300 transition cursor-pointer bg-slate-900/80 hover:bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800"
         >
           <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-          <span className="font-semibold text-[11px]">Humid1 Support</span>
+          <span className="font-semibold text-[11px]">Support</span>
           <ExternalLink className="w-3 h-3 text-slate-400" />
         </a>
       </div>
@@ -541,6 +556,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       <EcosystemModal
         isOpen={isEcosystemOpen}
         onClose={() => setIsEcosystemOpen(false)}
+      />
+
+      {/* API Inspector & Diagnostics Modal */}
+      <ApiInspectorModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        initialTab={diagnosticsTab}
       />
     </div>
   );

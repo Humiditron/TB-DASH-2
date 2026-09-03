@@ -115,6 +115,102 @@ class ApiLoggerService {
     this.saveToStorage();
     this.notify();
   }
+
+  /**
+   * Probes the ThingsBoard /api/auth/user endpoint with a specified token
+   * and records the complete HTTP transaction in the logger.
+   */
+  public async testTokenDirect(
+    serverUrl: string,
+    token: string
+  ): Promise<{ success: boolean; status: number; data?: any; error?: string }> {
+    const txId = 'test-' + Math.random().toString(36).substring(2, 9);
+    const cleanBase = serverUrl.replace(/\/+$/, '');
+    const url = `${cleanBase}/api/auth/user`;
+    const cleanToken = token.replace(/^Bearer\s+/i, '').trim();
+
+    this.logRequest(txId, 'GET', url, undefined, `Bearer ${cleanToken.substring(0, 16)}...`);
+
+    try {
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'X-Authorization': `Bearer ${cleanToken}`,
+          Authorization: `Bearer ${cleanToken}`,
+        },
+      });
+
+      let data: any;
+      try {
+        data = await resp.json();
+      } catch {
+        data = await resp.text();
+      }
+
+      if (resp.ok) {
+        this.logResponse(txId, resp.status, data);
+        return { success: true, status: resp.status, data };
+      } else {
+        const errMsg = typeof data === 'object' && data?.message ? data.message : `HTTP ${resp.status} ${resp.statusText}`;
+        this.logResponse(txId, resp.status, data, errMsg);
+        return { success: false, status: resp.status, data, error: errMsg };
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || 'Network request failed';
+      this.logResponse(txId, 0, undefined, errMsg);
+      return { success: false, status: 0, error: errMsg };
+    }
+  }
+
+  /**
+   * Probes the ThingsBoard /api/auth/login endpoint and records the complete HTTP transaction.
+   */
+  public async testLoginDirect(
+    serverUrl: string,
+    username: string,
+    password: string
+  ): Promise<{ success: boolean; status: number; data?: any; error?: string }> {
+    const txId = 'login-' + Math.random().toString(36).substring(2, 9);
+    const cleanBase = serverUrl.replace(/\/+$/, '');
+    const url = `${cleanBase}/api/auth/login`;
+
+    this.logRequest(txId, 'POST', url, { username, password: '•••' }, undefined);
+
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      let data: any;
+      try {
+        data = await resp.json();
+      } catch {
+        data = await resp.text();
+      }
+
+      if (resp.ok) {
+        this.logResponse(txId, resp.status, {
+          token: data?.token ? `${data.token.substring(0, 16)}...` : undefined,
+          refreshToken: data?.refreshToken ? `${data.refreshToken.substring(0, 16)}...` : undefined,
+        });
+        return { success: true, status: resp.status, data };
+      } else {
+        const errMsg = typeof data === 'object' && data?.message ? data.message : `HTTP ${resp.status} ${resp.statusText}`;
+        this.logResponse(txId, resp.status, data, errMsg);
+        return { success: false, status: resp.status, data, error: errMsg };
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || 'Network request failed';
+      this.logResponse(txId, 0, undefined, errMsg);
+      return { success: false, status: 0, error: errMsg };
+    }
+  }
 }
 
 export const apiLogger = new ApiLoggerService();
