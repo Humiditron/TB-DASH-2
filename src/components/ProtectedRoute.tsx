@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { thingsboard, UserProfile } from '../services/thingsboard';
 import { getResolvedOidcParams } from '../services/oidcConfig';
+import { getThingsBoardOAuth2Url } from '../config/env';
+import { isAuthentikOidcToken } from '../utils/authTokens';
 import { 
   ShieldCheck, 
   LogIn, 
@@ -40,10 +42,23 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
 
   const oidcParams = getResolvedOidcParams();
 
-  // Synchronize OIDC auth token with ThingsBoard service
+  // Check on load if native ThingsBoard token exists or was returned in URL
   useEffect(() => {
-    if (auth.isAuthenticated && auth.user?.access_token) {
-      thingsboard.setAuthSession(auth.user.access_token, auth.user.profile, auth.user.refresh_token);
+    const discovered = thingsboard.findAutomaticJwt();
+    if (discovered) {
+      setActiveToken(discovered);
+    }
+  }, []);
+
+  // Synchronize Authentik OIDC profile without injecting external token into ThingsBoard
+  useEffect(() => {
+    if (auth.isAuthenticated && auth.user?.profile) {
+      setUserProfile({
+        id: (auth.user.profile.sub as string) || 'oidc-user',
+        name: auth.user.profile.name || auth.user.profile.preferred_username || auth.user.profile.email || 'Humid1 User',
+        email: auth.user.profile.email || 'user@humid1.com',
+        role: 'Authenticated User',
+      });
     }
   }, [auth.isAuthenticated, auth.user]);
 
@@ -55,6 +70,17 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     });
     return unsub;
   }, []);
+
+  const handleThingsBoardSsoLogin = () => {
+    setLoginError(null);
+    try {
+      const targetUrl = getThingsBoardOAuth2Url();
+      console.info('[ThingsBoard SSO] Initiating ThingsBoard OAuth2 redirect to:', targetUrl);
+      window.location.href = targetUrl;
+    } catch (err: any) {
+      setLoginError(`ThingsBoard SSO Initiation failed: ${err?.message || 'Check configuration'}`);
+    }
+  };
 
   const handleAuthentikLogin = () => {
     setLoginError(null);
@@ -91,6 +117,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     const clean = directTokenInput.trim();
     if (!clean) {
       setLoginError('Please enter a valid JWT token string.');
+      return;
+    }
+    if (isAuthentikOidcToken(clean)) {
+      setLoginError(
+        '⚠️ Detected Authentik OIDC token (issued by auth.humid1.com). ThingsBoard API rejects external OIDC tokens with 401 Unauthorized. Please authenticate via "Sign In with ThingsBoard SSO" or log in with your ThingsBoard customer account credentials.'
+      );
       return;
     }
     thingsboard.setAuthSession(clean);
@@ -172,15 +204,27 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
           </div>
         )}
 
-        {/* Primary Action: Authentik SSO */}
+        {/* Primary Action: ThingsBoard SSO via OAuth2 */}
         <div className="space-y-3 mb-6">
           <button
-            onClick={handleAuthentikLogin}
+            onClick={handleThingsBoardSsoLogin}
             className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm shadow-lg shadow-amber-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 cursor-pointer"
           >
             <ShieldCheck className="w-4 h-4" />
-            <span>Sign In with Authentik SSO ({oidcParams.appSlug})</span>
+            <span>Sign In with ThingsBoard SSO (Authentik)</span>
           </button>
+
+          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 font-mono">
+            <span>Authenticates through ThingsBoard OAuth2</span>
+            <button
+              type="button"
+              onClick={handleAuthentikLogin}
+              className="text-amber-400 hover:underline flex items-center gap-1"
+              title="Direct Authentik OIDC flow"
+            >
+              Direct Authentik OIDC <ExternalLink className="w-3 h-3" />
+            </button>
+          </div>
 
           {/* OIDC Config Summary Pill */}
           <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] space-y-1 text-slate-400 font-mono">
@@ -189,13 +233,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
               <span className="text-slate-300 font-semibold">{oidcParams.authentikUrl}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">App Slug:</span>
-              <span className="text-amber-400 font-semibold">{oidcParams.appSlug}</span>
+              <span className="text-slate-500">ThingsBoard Gateway:</span>
+              <span className="text-amber-400 font-semibold">app.humid1.com/oauth2</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">Client ID:</span>
-              <span className="text-slate-300 font-semibold truncate max-w-[200px]" title={oidcParams.clientId}>
-                {oidcParams.clientId}
+              <span className="text-slate-500">Authentik App:</span>
+              <span className="text-slate-300 font-semibold truncate max-w-[200px]" title={oidcParams.appSlug}>
+                {oidcParams.appSlug}
               </span>
             </div>
           </div>

@@ -28,6 +28,7 @@ import {
   getCurrentReturnUrl,
 } from '../config/env';
 import { EcosystemModal } from './EcosystemModal';
+import { isAuthentikOidcToken } from '../utils/authTokens';
 
 interface AuthScreenProps {
   onAuthenticated: (user: AuthentikUser) => void;
@@ -101,8 +102,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     let targetUrl = customUrl;
 
     if (!targetUrl) {
-      // Direct Authentik Application provider (web-dash) with ?next= return url
-      targetUrl = getAuthentikAppLoginUrl(authentikSlug, returnUrl);
+      // Prioritize ThingsBoard OAuth2 handler so ThingsBoard issues a native session token
+      targetUrl = getThingsBoardOAuth2Url(serverUrl, returnUrl);
     }
 
     // Ensure absolute target
@@ -151,12 +152,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   const handleApplyDirectToken = async () => {
-    if (!directTokenInput.trim()) return;
+    const raw = directTokenInput.trim();
+    if (!raw) return;
+
+    if (isAuthentikOidcToken(raw)) {
+      setErrorMessage(
+        '⚠️ That is an Authentik OIDC token (issued by auth.humid1.com), not a native ThingsBoard session token! ThingsBoard API rejects external OIDC tokens directly with 401 Unauthorized. Please use "Sign In via ThingsBoard SSO" or log in with your ThingsBoard customer account credentials.'
+      );
+      return;
+    }
+
     setIsLoading(true);
     setLoadingText('Validating bearer token...');
     setErrorMessage(null);
 
-    tbClient.setSession(directTokenInput.trim());
+    tbClient.setSession(raw);
     const user = await tbClient.fetchCurrentUser();
     setIsLoading(false);
 

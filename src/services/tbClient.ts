@@ -273,25 +273,25 @@ export class ThingsBoardClientService {
         const tbClients = response.data.map((clientItem: any) => {
           let resolvedUrl = clientItem.url;
           if (!resolvedUrl) {
-            resolvedUrl = `${this.serverUrl}/oauth2/authorization/${clientItem.name || 'authentik'}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
+            resolvedUrl = `${this.serverUrl}/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           } else if (resolvedUrl.startsWith('/')) {
             resolvedUrl = `${this.serverUrl}${resolvedUrl}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}`;
           }
 
           return {
-            name: clientItem.title || clientItem.name || 'ThingsBoard OAuth2 Gateway',
+            name: clientItem.title || clientItem.name || 'Humid1 SSO (ThingsBoard)',
             icon: clientItem.icon || 'authentik',
             url: resolvedUrl,
           };
         });
 
         return [
+          ...tbClients,
           {
-            name: `Authentik SSO (${slug})`,
+            name: `Direct Authentik SSO (${slug})`,
             icon: 'authentik',
             url: directAuthentikUrl,
           },
-          ...tbClients,
         ];
       }
     } catch (err) {
@@ -300,14 +300,14 @@ export class ThingsBoardClientService {
 
     return [
       {
-        name: `Authentik SSO (${slug})`,
-        icon: 'authentik',
-        url: directAuthentikUrl,
-      },
-      {
-        name: 'ThingsBoard OAuth2 Gateway',
+        name: 'Humid1 SSO (ThingsBoard OAuth2)',
         icon: 'authentik',
         url: thingsBoardOAuthUrl,
+      },
+      {
+        name: `Direct Authentik SSO (${slug})`,
+        icon: 'authentik',
+        url: directAuthentikUrl,
       },
     ];
   }

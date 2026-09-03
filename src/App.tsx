@@ -33,15 +33,19 @@ export default function App() {
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
   const appDesc = getEnv('VITE_APP_DESCRIPTION', 'Precision Humidor Monitoring & Telemetry Stack');
 
-  // Synchronize authenticated OIDC user with ThingsBoard service
+  // Synchronize Authentik OIDC profile without overwriting native ThingsBoard session
   useEffect(() => {
-    if (auth.isAuthenticated && auth.user) {
-      const token = auth.user.access_token || auth.user.id_token || '';
-      thingsboard.setAuthSession(token, auth.user.profile);
-    } else if (!auth.isLoading && !auth.isAuthenticated) {
-      thingsboard.setAuthSession(null);
+    if (auth.isAuthenticated && auth.user?.profile) {
+      // Keep UI profile in sync with Authentik user profile
+      const prof = auth.user.profile;
+      setCurrentUser({
+        id: prof.sub || 'oidc-user',
+        name: prof.name || prof.preferred_username || prof.email || 'Humid1 User',
+        email: prof.email || 'user@humid1.com',
+        role: 'Authenticated User',
+      });
     }
-  }, [auth.isAuthenticated, auth.isLoading, auth.user]);
+  }, [auth.isAuthenticated, auth.user]);
 
   useEffect(() => {
     const unsubDevices = thingsboard.subscribe((updatedDevices, updatedAlarms) => {

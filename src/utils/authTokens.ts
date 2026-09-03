@@ -56,6 +56,48 @@ export function decodeJwtPayload(tokenStr?: string | null): Record<string, unkno
 }
 
 /**
+ * Checks if a JWT was issued by Authentik OIDC (not ThingsBoard native).
+ */
+export function isAuthentikOidcToken(tokenStr?: string | null): boolean {
+  const payload = decodeJwtPayload(tokenStr);
+  if (!payload) return false;
+  const iss = typeof payload.iss === 'string' ? payload.iss.toLowerCase() : '';
+  if (iss.includes('auth.humid1.com') || iss.includes('authentik') || iss.includes('/application/o/')) {
+    return true;
+  }
+  const aud = typeof payload.aud === 'string' ? payload.aud : Array.isArray(payload.aud) ? payload.aud.join(' ') : '';
+  if (aud.includes('humid1-dash') || aud.includes('7nvidWHfM8C3wE3VKGqFNGFNnl9aou46mL5kporI')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Checks if a JWT is a valid ThingsBoard session token (not an external Authentik OIDC token).
+ */
+export function isThingsBoardToken(tokenStr?: string | null): boolean {
+  const clean = normalizeBearerToken(tokenStr);
+  if (!clean || !clean.includes('.')) return false;
+  if (isAuthentikOidcToken(clean)) return false;
+
+  const payload = decodeJwtPayload(clean);
+  if (!payload) return false;
+
+  // Thingsboard JWTs contain scopes (e.g. ['CUSTOMER_USER'], ['TENANT_ADMIN']), userId, or tenantId
+  if (
+    Array.isArray(payload.scopes) &&
+    payload.scopes.some((s) => typeof s === 'string' && (s.includes('USER') || s.includes('ADMIN')))
+  ) {
+    return true;
+  }
+  if (payload.userId || payload.tenantId || payload.customerId) {
+    return true;
+  }
+  // Any valid non-Authentik JWT
+  return Boolean(payload.sub);
+}
+
+/**
  * Checks if a JWT is expired (or close to expiring within bufferSeconds).
  */
 export function isJwtExpired(tokenStr?: string | null, bufferSeconds = 30): boolean {

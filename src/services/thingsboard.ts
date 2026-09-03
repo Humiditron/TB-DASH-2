@@ -35,6 +35,8 @@ import {
   cleanUrlAfterAuth,
   decodeJwtPayload,
   performSilentTokenRefresh,
+  isAuthentikOidcToken,
+  isThingsBoardToken,
 } from '../utils/authTokens';
 import { registerGlobalClientInterceptors } from './apiClientInit';
 
@@ -51,6 +53,8 @@ export interface UserProfile {
   email: string;
   firstName?: string;
   lastName?: string;
+  name?: string;
+  role?: string;
   authority?: string;
   customerId?: { id: string } | string;
 }
@@ -109,88 +113,63 @@ class ThingsBoardService {
   }
 
   /**
-   * Automatically discovers the active JWT token from OIDC session storage,
-   * URL parameters, or environment variables.
+   * Automatically discovers the native ThingsBoard JWT token from URL parameters,
+   * ThingsBoard session storage, or environment variables.
+   * Explicitly excludes external Authentik OIDC tokens to avoid 401 errors.
    */
-
-  /**
   public findAutomaticJwt(): string | null {
     if (this.authToken && this.authToken.trim()) {
-      return this.authToken.trim();
+      if (isAuthentikOidcToken(this.authToken)) {
+        console.warn('[ThingsBoard] Active token is an external Authentik token, rejecting for ThingsBoard API.');
+        this.authToken = null;
+      } else {
+        return this.authToken.trim();
+      }
     }
 
     if (typeof window !== 'undefined') {
-      // 1. Scan window.location query & hash for tokens passed during redirect
+      // 1. Scan window.location query & hash for tokens returned from ThingsBoard OAuth2 redirect
       try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-        const queryToken =
-          urlParams.get('token') ||
-          urlParams.get('accessToken') ||
-          urlParams.get('jwtToken') ||
-          urlParams.get('access_token') ||
-          urlParams.get('jwt') ||
-          urlParams.get('id_token') ||
-          hashParams.get('access_token') ||
-          hashParams.get('id_token') ||
-          hashParams.get('token');
-
-        if (queryToken && queryToken.trim()) {
-          return queryToken.trim();
-        }
-      } catch {
-        // ignore
-      }
-
-      // 2. Scan sessionStorage for oidc-client user objects
-      try {
-        for (let i = 0; i < window.sessionStorage.length; i++) {
-          const key = window.sessionStorage.key(i);
-          if (key && (key.startsWith('oidc.user:') || key.includes('authentik') || key.includes('thingsboard'))) {
-            const rawVal = window.sessionStorage.getItem(key);
-            if (rawVal) {
-              try {
-                const parsed = JSON.parse(rawVal);
-                const candidate = parsed.access_token || parsed.id_token || parsed.token;
-                if (candidate && typeof candidate === 'string' && candidate.length > 20) {
-                  return candidate.trim();
-                }
-              } catch {
-                if (rawVal.length > 20 && rawVal.includes('.')) {
-                  return rawVal.trim();
-                }
-              }
+        const urlTokens = extractTokensFromUrl();
+        if (urlTokens.token && !isAuthentikOidcToken(urlTokens.token)) {
+          console.log('[ThingsBoard] Found native ThingsBoard session token from URL redirect callback.');
+          const validToken = urlTokens.token.trim();
+          this.authToken = validToken;
+          try {
+            localStorage.setItem('humid1_tb_jwt_token', validToken);
+            localStorage.setItem('humid1_active_jwt', validToken);
+            localStorage.setItem('tb_token', validToken);
+            if (urlTokens.refreshToken) {
+              const validRefresh = urlTokens.refreshToken.trim();
+              this.refreshToken = validRefresh;
+              localStorage.setItem('humid1_tb_jwt_refresh', validRefresh);
+              localStorage.setItem('humid1_active_refresh_token', validRefresh);
             }
+          } catch {
+            // ignore
           }
+          cleanUrlAfterAuth();
+          return validToken;
         }
       } catch {
         // ignore
       }
 
-      // 3. Scan localStorage for any stored OIDC sessions or tokens
+      // 2. Check explicit ThingsBoard token storage keys
       try {
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const key = window.localStorage.key(i);
-          if (
-            key &&
-            (key.startsWith('oidc.user:') ||
-              key.includes('authentik_token') ||
-              key.includes('tb_token') ||
-              key === 'humid1_active_jwt' ||
-              key === 'humid1_tb_jwt_token')
-          ) {
-            const rawVal = window.localStorage.getItem(key);
-            if (rawVal) {
+        const explicitKeys = ['humid1_tb_jwt_token', 'tb_token', 'humid1_active_jwt'];
+        for (const key of explicitKeys) {
+          const val = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+          if (val && val.trim() && val.includes('.')) {
+            const clean = normalizeBearerToken(val);
+            if (clean && !isAuthentikOidcToken(clean)) {
+              return clean;
+            } else if (clean && isAuthentikOidcToken(clean)) {
+              // Purge external Authentik token stored in ThingsBoard key
               try {
-                const parsed = JSON.parse(rawVal);
-                const candidate = parsed.access_token || parsed.id_token || parsed.token;
-                if (candidate && typeof candidate === 'string') {
-                  return candidate.trim();
-                }
+                window.localStorage.removeItem(key);
               } catch {
-                if (rawVal.length > 20 && rawVal.includes('.')) {
-                  return rawVal.trim();
-                }
+                // ignore
               }
             }
           }
@@ -201,118 +180,7 @@ class ThingsBoardService {
     }
 
     const envToken = getEnv('VITE_THINGSBOARD_TOKEN', '');
-    if (envToken && envToken.trim()) {
-      return envToken.trim();
-    }
-
-    return null;
-  }
-  */
-
-  public findAutomaticJwt(): string | null {
-    if (this.authToken && this.authToken.trim()) {
-      return this.authToken.trim();
-    }
-
-    if (typeof window !== 'undefined') {
-      // 0. Prioritize explicit ThingsBoard tokens first to avoid sending OIDC tokens to TB API
-      try {
-        const directTbToken = 
-          window.localStorage.getItem('humid1_tb_jwt_token') || 
-          window.localStorage.getItem('tb_token') ||
-          window.sessionStorage.getItem('humid1_tb_jwt_token');
-
-        const fullToken = localStorage.getItem('humid1_tb_jwt_token');
-        console.log("Full TB Token:", fullToken, "Length:", fullToken?.length);
-          
-        if (directTbToken && directTbToken.trim() && directTbToken.includes('.')) {
-          return directTbToken.trim();
-        }
-      } catch {
-        // ignore
-        console.log("TRY, FAILED!");
-      }
-
-      // 1. Scan window.location query & hash for tokens passed during redirect
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-        const queryToken =
-          urlParams.get('token') ||
-          urlParams.get('accessToken') ||
-          urlParams.get('jwtToken') ||
-          urlParams.get('access_token') ||
-          urlParams.get('jwt') ||
-          urlParams.get('id_token') ||
-          hashParams.get('access_token') ||
-          hashParams.get('id_token') ||
-          hashParams.get('token');
-
-        if (queryToken && queryToken.trim()) {
-          return queryToken.trim();
-        }
-      } catch {
-        // ignore
-      }
-
-      // 2. Scan sessionStorage for oidc-client user objects
-      try {
-        for (let i = 0; i < window.sessionStorage.length; i++) {
-          const key = window.sessionStorage.key(i);
-          if (key && (key.startsWith('oidc.user:') || key.includes('authentik') || key.includes('thingsboard'))) {
-            const rawVal = window.sessionStorage.getItem(key);
-            if (rawVal) {
-              try {
-                const parsed = JSON.parse(rawVal);
-                const candidate = parsed.access_token || parsed.id_token || parsed.token;
-                if (candidate && typeof candidate === 'string' && candidate.length > 20) {
-                  return candidate.trim();
-                }
-              } catch {
-                if (rawVal.length > 20 && rawVal.includes('.')) {
-                  return rawVal.trim();
-                }
-              }
-            }
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      // 3. Scan localStorage for remaining stored OIDC sessions or tokens
-      try {
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const key = window.localStorage.key(i);
-          if (
-            key &&
-            (key.startsWith('oidc.user:') ||
-              key.includes('authentik_token') ||
-              key === 'humid1_active_jwt')
-          ) {
-            const rawVal = window.localStorage.getItem(key);
-            if (rawVal) {
-              try {
-                const parsed = JSON.parse(rawVal);
-                const candidate = parsed.access_token || parsed.id_token || parsed.token;
-                if (candidate && typeof candidate === 'string') {
-                  return candidate.trim();
-                }
-              } catch {
-                if (rawVal.length > 20 && rawVal.includes('.')) {
-                  return rawVal.trim();
-                }
-              }
-            }
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    const envToken = getEnv('VITE_THINGSBOARD_TOKEN', '');
-    if (envToken && envToken.trim()) {
+    if (envToken && envToken.trim() && !isAuthentikOidcToken(envToken)) {
       return envToken.trim();
     }
 
@@ -342,7 +210,8 @@ class ThingsBoardService {
   }
 
   /**
-   * Called when Authentik OIDC authenticates or user signs in.
+   * Sets ThingsBoard authentication session.
+   * Protects against external Authentik OIDC tokens being used as ThingsBoard API tokens.
    */
   public async setAuthSession(token: string | null, profile?: any, refreshToken?: string | null): Promise<void> {
     const cleanToken = normalizeBearerToken(token);
@@ -367,6 +236,25 @@ class ThingsBoardService {
       applyThingsBoardClientAuth(client, null);
       this.notifyAuth();
       this.notifySubscribers();
+      return;
+    }
+
+    // Critical check: if an external Authentik OIDC token is passed, reject it from ThingsBoard API session
+    if (isAuthentikOidcToken(cleanToken)) {
+      console.warn(
+        '[ThingsBoard] An Authentik OIDC token was passed to ThingsBoard session. ' +
+        'ThingsBoard requires its native session token (via ThingsBoard OAuth2 redirect or username/password). ' +
+        'Preserving current ThingsBoard session.'
+      );
+      if (profile && !this.currentUser) {
+        this.currentUser = {
+          id: profile.sub || profile.id || 'oidc-user',
+          name: profile.name || profile.preferred_username || profile.email || 'Humid1 User',
+          email: profile.email || 'user@humid1.com',
+          role: 'OIDC User',
+        };
+        this.notifyAuth();
+      }
       return;
     }
 
