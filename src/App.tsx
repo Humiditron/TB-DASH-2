@@ -13,6 +13,7 @@ import { ClaimDeviceModal } from './components/ClaimDeviceModal';
 import { ServerConfigModal } from './components/ServerConfigModal';
 import { AuthModal } from './components/AuthModal';
 import { ApiInspectorModal } from './components/ApiInspectorModal';
+import { HumidorTelemetryWidget } from './components/HumidorTelemetryWidget';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
 import { Flame, Cpu } from 'lucide-react';
@@ -122,6 +123,13 @@ export default function App() {
                 device={selectedDevice}
                 tempUnit={tempUnit}
                 onToggleTempUnit={handleToggleTempUnit}
+              />
+
+              {/* Direct @enerlab/thingsboard-client Telemetry & Session Monitor */}
+              <HumidorTelemetryWidget
+                deviceId={selectedDevice.id}
+                serverUrl={thingsboard.getConfig().serverUrl}
+                deviceName={selectedDevice.name}
               />
 
               {/* Historical Telemetry Chart */}

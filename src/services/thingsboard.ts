@@ -1,13 +1,12 @@
 import {
   client,
-  claimDevice as apiClaimDevice,
+  claimDevice1 as apiClaimDevice,
   reClaimDevice as apiReClaimDevice,
   getCustomerDeviceInfos as apiGetCustomerDeviceInfos,
   getCustomerDevices as apiGetCustomerDevices,
-  getTenantDeviceInfos as apiGetTenantDeviceInfos,
+  getAllDeviceInfos as apiGetAllDeviceInfos,
   getTenantDevices as apiGetTenantDevices,
   getLatestTimeseries as apiGetLatestTimeseries,
-  getTimeseriesHistory as apiGetTimeseriesHistory,
   getAttributesByScope as apiGetAttributesByScope,
   saveDeviceAttributes as apiSaveDeviceAttributes,
   getAllAlarmsV2 as apiGetAllAlarmsV2,
@@ -15,9 +14,9 @@ import {
   ackAlarm as apiAckAlarm,
   clearAlarm as apiClearAlarm,
   getUser as apiGetUser,
-  login as apiLogin,
-  logout as apiLogout,
-} from '../client/services.gen';
+  login as tbLogin,
+  logout as tbLogout,
+} from '@enerlab/thingsboard-client';
 import {
   HumidorDevice,
   HumidorAlarm,
@@ -70,7 +69,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Configure the @hey-api OpenAPI client instance from /src_lib/client
+   * Configure the @enerlab/thingsboard-client instance
    */
   private initOpenApiClient() {
     const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
@@ -317,26 +316,20 @@ class ThingsBoardService {
   }
 
   /**
-   * Login using OpenAPI client login method
+   * Login using @enerlab/thingsboard-client login method
    */
   public async loginWithCredentials(username: string, pass: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const res = await apiLogin({
-        body: {
-          username,
-          password: pass,
-        },
-      });
+      const res = await tbLogin(username, pass, { client: client as any });
 
-      if (res.data && res.data.token) {
-        await this.setAuthSession(res.data.token);
+      if (res && res.token) {
+        await this.setAuthSession(res.token);
         return { success: true };
       }
 
-      const errObj = res.error as any;
       return {
         success: false,
-        error: errObj?.message || 'Authentication failed. Please verify credentials.',
+        error: 'Authentication failed. Please verify credentials.',
       };
     } catch (err: any) {
       return {
@@ -348,7 +341,7 @@ class ThingsBoardService {
 
   public async logout(): Promise<void> {
     try {
-      await apiLogout();
+      tbLogout({ client: client as any });
     } catch {
       // ignore
     }
@@ -586,14 +579,14 @@ class ThingsBoardService {
         }
       }
 
-      // 2. Try tenant device infos
+      // 2. Try all device infos
       if (rawDevices.length === 0) {
         try {
-          const tenantRes = await apiGetTenantDeviceInfos({
+          const allRes = await apiGetAllDeviceInfos({
             query: { pageSize: 100, page: 0 },
           });
-          if (tenantRes.data && Array.isArray((tenantRes.data as any).data)) {
-            rawDevices = (tenantRes.data as any).data;
+          if (allRes.data && Array.isArray((allRes.data as any).data)) {
+            rawDevices = (allRes.data as any).data;
           }
         } catch {
           // ignore
@@ -604,7 +597,7 @@ class ThingsBoardService {
       if (rawDevices.length === 0) {
         try {
           const tenantDevRes = await apiGetTenantDevices({
-            query: { pageSize: 100, page: 0 },
+            query: { pageSize: 100, page: 0 } as any,
           });
           if (tenantDevRes.data && Array.isArray((tenantDevRes.data as any).data)) {
             rawDevices = (tenantDevRes.data as any).data;
@@ -652,14 +645,14 @@ class ThingsBoardService {
             manual_ota_trigger: false,
           };
 
-          // Fetch real latest timeseries via /src_lib/client apiGetLatestTimeseries
+          // Fetch real latest timeseries via apiGetLatestTimeseries
           try {
             const telRes = await apiGetLatestTimeseries({
               path: {
                 entityType: 'DEVICE',
                 entityId: devId,
               },
-            });
+            } as any);
 
             if (telRes.data) {
               const telData = telRes.data as Record<string, Array<{ ts: number; value: any }>>;
@@ -685,7 +678,7 @@ class ThingsBoardService {
             // ignore
           }
 
-          // Fetch client attributes via /src_lib/client apiGetAttributesByScope
+          // Fetch client attributes via apiGetAttributesByScope
           try {
             const attrRes = await apiGetAttributesByScope({
               path: {
@@ -693,7 +686,7 @@ class ThingsBoardService {
                 entityId: devId,
                 scope: 'CLIENT_SCOPE',
               },
-            });
+            } as any);
 
             if (attrRes.data && Array.isArray(attrRes.data)) {
               (attrRes.data as any[]).forEach((a: any) => {
@@ -704,7 +697,7 @@ class ThingsBoardService {
             // ignore
           }
 
-          // Fetch shared attributes via /src_lib/client apiGetAttributesByScope
+          // Fetch shared attributes via apiGetAttributesByScope
           try {
             const sharedRes = await apiGetAttributesByScope({
               path: {
@@ -712,7 +705,7 @@ class ThingsBoardService {
                 entityId: devId,
                 scope: 'SHARED_SCOPE',
               },
-            });
+            } as any);
 
             if (sharedRes.data && Array.isArray(sharedRes.data)) {
               (sharedRes.data as any[]).forEach((a: any) => {
@@ -794,7 +787,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Claim device using the TypeScript OpenAPI library in /src_lib/client/ (apiClaimDevice)
+   * Claim device using @enerlab/thingsboard-client (apiClaimDevice)
    */
   public async claimDevice(deviceName: string, secretKey: string): Promise<HumidorDevice> {
     const token = this.getEffectiveToken();
@@ -814,7 +807,7 @@ class ThingsBoardService {
       deviceName: cleanDeviceName,
       secretKey: cleanSecret ? '••••••' : '(None)',
       status: 'PENDING',
-      message: `Dispatching claim request for "${cleanDeviceName}" via /src_lib/client...`,
+      message: `Dispatching claim request for "${cleanDeviceName}" via ThingsBoard REST API...`,
     };
 
     try {
@@ -823,7 +816,7 @@ class ThingsBoardService {
           deviceName: cleanDeviceName,
         },
         body: cleanSecret ? { secretKey: cleanSecret } : undefined,
-      });
+      } as any);
 
       if (claimRes.error) {
         const errObj = claimRes.error as any;
@@ -957,7 +950,7 @@ class ThingsBoardService {
   }
 
   /**
-   * Get timeseries history via /src_lib/client apiGetTimeseriesHistory
+   * Get timeseries history via @enerlab/thingsboard-client apiGetLatestTimeseries
    */
   public async getHistory(deviceId: string, rangeHours: number = 72): Promise<HistoricalTelemetryPoint[]> {
     const token = this.getEffectiveToken();
@@ -968,7 +961,7 @@ class ThingsBoardService {
       const endTs = Date.now();
       const limit = '500';
 
-      const res = await apiGetTimeseriesHistory({
+      const res = await apiGetLatestTimeseries({
         path: {
           entityType: 'DEVICE',
           entityId: deviceId,
@@ -978,7 +971,8 @@ class ThingsBoardService {
           startTs,
           endTs,
           limit,
-        },
+          agg: 'NONE',
+        } as any,
       });
 
       if (res.data) {

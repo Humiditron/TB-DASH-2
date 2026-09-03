@@ -1,25 +1,22 @@
-import { client } from '../client/services.gen';
 import {
-  login as apiLogin,
-  logout as apiLogout,
+  client,
+  login as tbLogin,
+  logout as tbLogout,
   getUser as apiGetUser,
-  refreshToken as apiRefreshToken,
-  getOauth2Clients as apiGetOauth2Clients,
-  claimDevice as apiClaimDevice,
+  getOAuth2Clients as apiGetOauth2Clients,
+  claimDevice1 as apiClaimDevice,
   reClaimDevice as apiReClaimDevice,
   getCustomerDeviceInfos as apiGetCustomerDeviceInfos,
-  getTenantDeviceInfos as apiGetTenantDeviceInfos,
+  getAllDeviceInfos as apiGetAllDeviceInfos,
   getLatestTimeseries as apiGetLatestTimeseries,
   getAttributesByScope as apiGetAttributesByScope,
   saveDeviceAttributes as apiSaveDeviceAttributes,
   getAllAlarmsV2 as apiGetAllAlarmsV2,
   ackAlarm as apiAckAlarm,
   clearAlarm as apiClearAlarm,
-} from '../client/services.gen';
-import type {
-  User,
-  ClaimDeviceData,
-} from '../client/types.gen';
+  type User,
+  type ClaimDeviceData,
+} from '@enerlab/thingsboard-client';
 import {
   AuthentikUser,
   ClaimLogEntry,
@@ -257,7 +254,7 @@ export class ThingsBoardClientService {
   public async logout(): Promise<void> {
     if (this.token) {
       try {
-        await apiLogout();
+        tbLogout({ client: client as any });
       } catch (err) {
         console.warn('[ThingsBoard] Logout API error:', err);
       }
@@ -329,22 +326,16 @@ export class ThingsBoardClientService {
     password: string
   ): Promise<{ success: boolean; error?: string; user?: AuthentikUser }> {
     try {
-      const res = await apiLogin({
-        body: {
-          username,
-          password,
-        },
-      });
+      const res = await tbLogin(username, password, { client: client as any });
 
-      if (res.data && res.data.token) {
-        this.setSession(res.data.token, res.data.refreshToken);
+      if (res && res.token) {
+        this.setSession(res.token, res.refreshToken);
         const userRes = await this.fetchCurrentUser();
         return { success: true, user: userRes || undefined };
       } else {
-        const errObj = res.error as any;
         return {
           success: false,
-          error: errObj?.message || 'Authentication failed. Please verify credentials.',
+          error: 'Authentication failed. Please verify credentials.',
         };
       }
     } catch (err: any) {
@@ -401,15 +392,18 @@ export class ThingsBoardClientService {
     if (!this.refreshToken) return false;
 
     try {
-      const res = await apiRefreshToken({
-        body: {
-          refreshToken: this.refreshToken,
-        },
+      const res = await fetch(`${this.serverUrl}/api/auth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: this.refreshToken }),
       });
 
-      if (res.data && res.data.token) {
-        this.setSession(res.data.token, res.data.refreshToken);
-        return true;
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.token) {
+          this.setSession(data.token, data.refreshToken);
+          return true;
+        }
       }
     } catch (err) {
       console.warn('[ThingsBoard] Silent token refresh failed:', err);
@@ -441,14 +435,14 @@ export class ThingsBoardClientService {
     };
 
     try {
-      const claimData: ClaimDeviceData = {
+      const claimData = {
         path: {
           deviceName: trimmedName,
         },
         body: trimmedKey ? { secretKey: trimmedKey } : undefined,
       };
 
-      const res = await apiClaimDevice(claimData);
+      const res = await apiClaimDevice(claimData as any);
 
       if (res.error) {
         const errorObj = res.error as any;
@@ -550,10 +544,10 @@ export class ThingsBoardClientService {
         }
       }
 
-      // If tenant admin or no devices found under customerId, try tenant device infos
+      // If tenant admin or no devices found under customerId, try all device infos
       if (rawDeviceList.length === 0) {
         try {
-          const tenantRes = await apiGetTenantDeviceInfos({
+          const tenantRes = await apiGetAllDeviceInfos({
             query: { pageSize: 100, page: 0 },
           });
           if (tenantRes.data && Array.isArray((tenantRes.data as any).data)) {
@@ -588,7 +582,7 @@ export class ThingsBoardClientService {
                 entityType: 'DEVICE',
                 entityId: deviceId,
               },
-            });
+            } as any);
 
             if (tsRes.data) {
               const tsData = tsRes.data as Record<string, Array<{ ts: number; value: any }>>;
@@ -636,7 +630,7 @@ export class ThingsBoardClientService {
                 entityId: deviceId,
                 scope: 'CLIENT_SCOPE',
               },
-            });
+            } as any);
 
             if (clientAttrRes.data && Array.isArray(clientAttrRes.data)) {
               for (const attr of clientAttrRes.data as Array<{ key: string; value: any }>) {
@@ -666,7 +660,7 @@ export class ThingsBoardClientService {
                 entityId: deviceId,
                 scope: 'SHARED_SCOPE',
               },
-            });
+            } as any);
 
             if (sharedAttrRes.data && Array.isArray(sharedAttrRes.data)) {
               for (const attr of sharedAttrRes.data as Array<{ key: string; value: any }>) {

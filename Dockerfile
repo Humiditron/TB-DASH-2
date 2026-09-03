@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# Copy application source and user src_lib
+# Copy application source code
 COPY . .
 
 # Build production bundle

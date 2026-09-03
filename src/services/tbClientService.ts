@@ -1,0 +1,268 @@
+import {
+  client,
+  login,
+  logout,
+  setupAuth,
+  getDeviceById,
+  getLatestTimeseries,
+  getAttributesByScope,
+  type Device,
+} from '@enerlab/thingsboard-client';
+import {
+  zDevice,
+} from '@enerlab/thingsboard-client/zod';
+import { z } from 'zod';
+
+export type TBClientInstance = typeof client;
+
+export interface ClientOptions {
+  baseUrl: string;
+  token?: string;
+  timeoutMs?: number;
+}
+
+export interface TelemetryDataPoint {
+  ts: number;
+  value: number | string | boolean | any;
+}
+
+export const zTsKvEntry = z.object({
+  ts: z.number(),
+  value: z.union([z.string(), z.number(), z.boolean(), z.null(), z.record(z.string(), z.any())]),
+});
+
+export type LatestTelemetryMap = Record<string, TelemetryDataPoint>;
+
+export interface TelemetryHistoryPoint {
+  ts: number;
+  value: number | string;
+}
+
+/**
+ * 1. Global / Singleton Client Configuration Helper
+ * Configures baseUrl and sets up auth token handling
+ */
+export function configureDefaultClient({ baseUrl, token }: ClientOptions): void {
+  const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+  client.setConfig({
+    baseUrl: cleanBaseUrl,
+  });
+  if (token) {
+    setupAuth(client, { mode: 'bearer', token });
+    client.setConfig({
+      headers: {
+        'X-Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  }
+}
+
+/**
+ * 2. Session Management via built-in login() helper from @enerlab/thingsboard-client
+ * Authenticates against ThingsBoard REST endpoint (/api/auth/login)
+ * and automatically binds the JWT token to the client.
+ */
+export async function loginThingsBoard(
+  username: string,
+  password: string,
+  customClient: TBClientInstance = client
+): Promise<{ token: string; refreshToken: string }> {
+  try {
+    const authData = await login(username, password, {
+      client: customClient as any,
+    });
+
+    // Also inject redundant Authorization header for complete compatibility
+    customClient.setConfig({
+      headers: {
+        'X-Authorization': `Bearer ${authData.token}`,
+        Authorization: `Bearer ${authData.token}`,
+      },
+    });
+
+    return {
+      token: authData.token,
+      refreshToken: authData.refreshToken,
+    };
+  } catch (error: any) {
+    throw new Error(error?.message || 'Authentication failed: Invalid credentials');
+  }
+}
+
+/**
+ * Log out and clear session credentials
+ */
+export function logoutThingsBoard(customClient: TBClientInstance = client): void {
+  logout({ client: customClient as any });
+}
+
+/**
+ * 3. Manual Token Override Support
+ * Allows overriding active JWT token from localStorage or session state.
+ */
+export function setManualTokenOverride(
+  token: string,
+  customClient: TBClientInstance = client
+): void {
+  setupAuth(customClient as any, { mode: 'bearer', token });
+  customClient.setConfig({
+    headers: {
+      'X-Authorization': `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+/**
+ * 4. Isolated Client Instances
+ * Facilitates isolated client instances for multi-tenant or multi-server scenarios.
+ */
+export function createIsolatedThingsBoardClient(options: ClientOptions): TBClientInstance {
+  // Clone singleton configuration
+  const customClient = Object.create(client) as TBClientInstance;
+  customClient.setConfig({
+    baseUrl: options.baseUrl.replace(/\/$/, ''),
+    headers: options.token
+      ? {
+          'X-Authorization': `Bearer ${options.token}`,
+          Authorization: `Bearer ${options.token}`,
+        }
+      : {},
+  });
+
+  return customClient;
+}
+
+/**
+ * 5. Fetch Device Details with Zod Boundary Validation
+ */
+export async function fetchDevice(
+  deviceId: string,
+  customClient: TBClientInstance = client
+): Promise<Device> {
+  try {
+    const response = await getDeviceById({
+      client: customClient as any,
+      path: {
+        deviceId,
+      },
+    });
+
+    if (response.error || !response.data) {
+      handleApiError(response.error, 'Failed to fetch device details');
+    }
+
+    return zDevice.parse(response.data) as unknown as Device;
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      throw new Error(`Device schema validation error: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 6. Fetch Latest Telemetry Timeseries with Zod Validation
+ */
+export async function fetchLatestTelemetry(
+  deviceId: string,
+  keys?: string[],
+  customClient: TBClientInstance = client
+): Promise<LatestTelemetryMap> {
+  const response = await getLatestTimeseries({
+    client: customClient as any,
+    path: {
+      entityType: 'DEVICE',
+      entityId: deviceId,
+    },
+    query: {
+      keys: keys?.join(','),
+      useStrictDataTypes: true,
+    } as any,
+  });
+
+  if (response.error || !response.data) {
+    handleApiError(response.error, 'Failed to fetch latest telemetry');
+  }
+
+  const rawData = response.data as Record<string, Array<{ ts: number; value: any }>>;
+  const result: LatestTelemetryMap = {};
+
+  for (const [key, entries] of Object.entries(rawData)) {
+    if (entries && entries.length > 0) {
+      const parsedEntry = zTsKvEntry.safeParse(entries[0]);
+      if (parsedEntry.success) {
+        result[key] = {
+          ts: parsedEntry.data.ts,
+          value: parsedEntry.data.value,
+        };
+      } else {
+        result[key] = {
+          ts: entries[0].ts,
+          value: entries[0].value,
+        };
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 7. Fetch Telemetry History Timeseries
+ */
+export async function fetchTelemetryHistory(
+  deviceId: string,
+  keys: string[],
+  startTs: number,
+  endTs: number,
+  limit: number = 100,
+  customClient: TBClientInstance = client
+): Promise<Record<string, TelemetryHistoryPoint[]>> {
+  const response = await getLatestTimeseries({
+    client: customClient as any,
+    path: {
+      entityType: 'DEVICE',
+      entityId: deviceId,
+    },
+    query: {
+      keys: keys.join(','),
+      startTs,
+      endTs,
+      limit: String(limit),
+      agg: 'NONE',
+    } as any,
+  });
+
+  if (response.error || !response.data) {
+    handleApiError(response.error, 'Failed to fetch timeseries history');
+  }
+
+  const raw = response.data as Record<string, Array<{ ts: number; value: any }>>;
+  const output: Record<string, TelemetryHistoryPoint[]> = {};
+
+  for (const [key, dataPoints] of Object.entries(raw)) {
+    output[key] = (dataPoints || []).map((dp) => ({
+      ts: dp.ts,
+      value: dp.value,
+    }));
+  }
+
+  return output;
+}
+
+/**
+ * Error Handling Wrapper
+ */
+function handleApiError(error: any, fallbackMessage: string): never {
+  const status = error?.status || error?.statusCode || error?.response?.status;
+  if (status === 401 || status === 403) {
+    throw new Error('THINGSBOARD_UNAUTHORIZED: Session expired or invalid credentials');
+  }
+  if (error?.name === 'AbortError' || error?.code === 'ECONNABORTED') {
+    throw new Error('THINGSBOARD_TIMEOUT: Network request timed out');
+  }
+  const msg = error?.message || error?.statusText || fallbackMessage;
+  throw new Error(msg);
+}
