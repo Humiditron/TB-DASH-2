@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.humid1.app",
+      "sha256_cert_fingerprints": [
+        "14:6D:E9:44:C5:4F:57:3E:86:70:9B:04:A9:7A:B4:73:24:D3:85:6A:E8:27:07:90:7D:66:E8:86:14:46:1D:95"
+      ]
+    }
+  }
+]

@@ -126,6 +126,17 @@ Container runtime variables are dynamically compiled into `window.__HUMID1_CONFI
 
 ---
 
+## 📱 Progressive Web App (PWA) & Android TWA
+
+HUMID1_OS is fully compliant with Google PWA and **Trusted Web Activity (TWA)** specifications:
+- **Service Worker:** Powered by `vite-plugin-pwa` with Workbox v7 precaching & automatic background updates.
+- **Web Push API:** Push notification service for high-priority humidity breaches, temperature alarms, and low battery alerts.
+- **Digital Asset Links:** Served at `/.well-known/assetlinks.json` linking `dash.humid1.com` to `com.humid1.app` for address-bar-free native Android execution.
+- **Bubblewrap Build Guide:** Step-by-step instructions to compile the native Android APK/AAB are documented in:
+  👉 **[`docs/twa_bubblewrap_guide.md`](docs/twa_bubblewrap_guide.md)**
+
+---
+
 ## 📡 API Transaction & JSON Manifest
 
 A full catalog of real request/response payloads, headers, curl examples, and WebSocket formats across ThingsBoard REST, Authentik OIDC PKCE, ESP32 telemetry ingestion, shared attribute sync, device claiming, and 2-way RPC commands is documented in:

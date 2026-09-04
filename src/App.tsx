@@ -17,9 +17,10 @@ import { RemoveDeviceModal } from './components/RemoveDeviceModal';
 import { HumidorTelemetryWidget } from './components/HumidorTelemetryWidget';
 import { DevelopmentWarningModal } from './components/DevelopmentWarningModal';
 import { AboutModal } from './components/AboutModal';
+import { PushNotificationModal } from './components/PushNotificationModal';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
-import { Flame, Cpu, Info, AlertTriangle } from 'lucide-react';
+import { Flame, Cpu, Info, AlertTriangle, BellRing } from 'lucide-react';
 
 export default function App() {
   const auth = useAuth();
@@ -34,6 +35,7 @@ export default function App() {
   const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
   const [isDevWarningOpen, setIsDevWarningOpen] = useState(false);
+  const [isPushModalOpen, setIsPushModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
@@ -123,6 +125,7 @@ export default function App() {
           onOpenApiInspector={() => setIsApiInspectorOpen(true)}
           onOpenAboutModal={() => setIsAboutModalOpen(true)}
           onOpenDevWarning={() => setIsDevWarningOpen(true)}
+          onOpenPushModal={() => setIsPushModalOpen(true)}
           onOpenAlarmsModal={() => {
             const el = document.getElementById('alarms-feed-section');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -260,6 +263,10 @@ export default function App() {
           isOpen={isAboutModalOpen}
           onClose={() => setIsAboutModalOpen(false)}
           onOpenDevWarning={() => setIsDevWarningOpen(true)}
+        />
+        <PushNotificationModal
+          isOpen={isPushModalOpen}
+          onClose={() => setIsPushModalOpen(false)}
         />
         <RemoveDeviceModal
           isOpen={isRemoveModalOpen}

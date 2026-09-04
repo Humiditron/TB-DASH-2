@@ -175,11 +175,11 @@ Retrieves the logged-in user identity, tenant, and customer assignment.
       "id": "3bc24190-a10b-11f1-9abc-123456789abc",
       "entityType": "CUSTOMER"
     },
-    "email": "user@humid1.com",
+    "email": "admin@humid1.com",
     "authority": "CUSTOMER_USER",
-    "firstName": "Matthew",
-    "lastName": "McCardle",
-    "name": "user@humid1.com",
+    "firstName": "HUMID1",
+    "lastName": "Operator",
+    "name": "admin@humid1.com",
     "additionalInfo": {
       "userCredentialsEnabled": true,
       "defaultDashboardId": null

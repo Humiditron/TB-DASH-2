@@ -17,8 +17,11 @@ import {
   LogOut,
   Terminal,
   Info,
-  AlertTriangle
+  AlertTriangle,
+  BellRing,
+  Smartphone
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderTickerProps {
   devices: HumidorDevice[];
@@ -33,6 +36,7 @@ interface HeaderTickerProps {
   onOpenApiInspector: () => void;
   onOpenAboutModal: () => void;
   onOpenDevWarning: () => void;
+  onOpenPushModal: () => void;
   activeAlarmCount: number;
   currentUser: UserProfile | null;
   isDemoMode: boolean;
@@ -51,6 +55,7 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
   onOpenApiInspector,
   onOpenAboutModal,
   onOpenDevWarning,
+  onOpenPushModal,
   activeAlarmCount,
   currentUser,
   isDemoMode,
@@ -209,6 +214,20 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
 
         {/* Center / Right Controls */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          {/* PWA Install Button / Status */}
+          <PWAInstallButton />
+
+          {/* Web Push Alerts Modal Trigger */}
+          <button
+            id="open-push-modal-btn"
+            onClick={onOpenPushModal}
+            className="p-2 rounded-lg bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-slate-300 hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1 text-xs font-mono"
+            title="Web Push Notifications & TWA Settings"
+          >
+            <BellRing className="w-4 h-4 text-amber-400" />
+            <span className="hidden xl:inline">Push</span>
+          </button>
+
           {/* About Badge Button */}
           <button
             id="open-about-modal-btn"

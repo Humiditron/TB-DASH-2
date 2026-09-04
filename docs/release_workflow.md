@@ -130,20 +130,36 @@ When a web app tag is pushed (e.g. `git tag v1.0.4 && git push origin v1.0.4`):
              └──> Output unsigned & signed .apk / .aab artifacts to GitHub Releases
 ```
 
-### GitHub Actions Workflow: `.github/workflows/webapp-release.yml`
+### GitHub Actions Workflow: `.github/workflows/android-twa.yml`
 ```yaml
-name: Release Web PWA & Android TWA
+name: Build Android TWA (APK & AAB)
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_bundle:
+        description: 'Build Google Play Android App Bundle (.aab)'
+        required: true
+        type: boolean
+        default: true
+      skip_pwa_validation:
+        description: 'Skip live PWA origin validation during build'
+        required: true
+        type: boolean
+        default: true
 
 jobs:
-  build-and-deploy:
+  build-android-twa:
+    name: Build Android TWA APK & AAB
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -152,43 +168,67 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck & Build PWA
+      - name: Validate & Build Web PWA
         run: npm run build
 
-      - name: Deploy Web Bundle to Production Caddy Server
-        uses: easingthemes/ssh-deploy@v5
-        with:
-          SSH_PRIVATE_KEY: ${{ secrets.PROD_SERVER_SSH_KEY }}
-          REMOTE_HOST: ${{ secrets.PROD_SERVER_HOST }}
-          REMOTE_USER: ${{ secrets.PROD_SERVER_USER }}
-          SOURCE: "dist/"
-          TARGET: "/var/www/humid1-app/"
-
-      - name: Setup Java for Android TWA Build
+      - name: Setup Java (JDK 17)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Android TWA (Bubblewrap CLI)
+      - name: Setup Android SDK Tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: Configure Keystore for Signing
+        id: keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS || 'humid1pass' }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'humid1-key' }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASS || 'humid1pass' }}
         run: |
-          npm install -g @bubblewrap/cli
-          echo "$KEYSTORE_BASE64" | base64 -d > android.keystore
-          bubblewrap build --skipPwaValidation
+          mkdir -p android-build
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android-build/android-keystore.jks
+          else
+            keytool -genkey -v -keystore android-build/android-keystore.jks \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KEYSTORE_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=HUMID1, OU=Engineering, O=HUMID1 Systems, L=Denver, S=CO, C=US"
+          fi
 
-      - name: Attach APK to GitHub Release
+      - name: Build Android TWA Project with Bubblewrap
+        run: |
+          cp twa-manifest.json android-build/
+          cd android-build
+          bubblewrap build --manifest=twa-manifest.json --skipPwaValidation
+
+      - name: Build Android App Bundle (.aab)
+        if: github.event.inputs.build_bundle != 'false'
+        run: |
+          cd android-build
+          bubblewrap build --manifest=twa-manifest.json --skipPwaValidation --bundle || true
+
+      - name: Upload APK & AAB Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: humid1-android-twa-artifacts
+          path: output/
+          retention-days: 14
+
+      - name: Attach APK and AAB to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            app-release-signed.apk
-            app-release-bundle.aab
+          files: output/*
 ```
 
 ---

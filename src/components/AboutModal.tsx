@@ -222,6 +222,12 @@ export const AboutModal: React.FC<AboutModalProps> = ({
                 <span className="text-purple-300 font-bold">React 18 + Vite + Tailwind CSS</span>
                 <span className="text-[10px] text-slate-500 block">Docker Multi-stage runtime</span>
               </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 sm:col-span-2">
+                <span className="text-slate-500 block text-[10px]">PWA &amp; Native Android TWA Stack</span>
+                <span className="text-amber-300 font-bold">Vite PWA (Workbox v7) + Google Bubblewrap CLI</span>
+                <span className="text-[10px] text-slate-400 block">com.humid1.app • Web Push API • /.well-known/assetlinks.json</span>
+              </div>
             </div>
           </div>
         </div>

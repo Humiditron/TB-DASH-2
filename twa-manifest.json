@@ -1,0 +1,54 @@
+{
+  "packageId": "com.humid1.app",
+  "host": "dash.humid1.com",
+  "name": "HUMID1 Humidor OS",
+  "launcherName": "HUMID1",
+  "display": "standalone",
+  "themeColor": "#0f172a",
+  "themeColorDark": "#0b1120",
+  "navigationColor": "#0f172a",
+  "navigationColorDark": "#0b1120",
+  "navigationDividerColor": "#1e293b",
+  "navigationDividerColorDark": "#1e293b",
+  "backgroundColor": "#0f172a",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://dash.humid1.com/pwa-512x512.png",
+  "maskableIconUrl": "https://dash.humid1.com/pwa-maskable-512x512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android-keystore.jks",
+    "alias": "humid1-key"
+  },
+  "appVersionName": "1.2.0",
+  "appVersionCode": 120,
+  "shortcuts": [
+    {
+      "name": "Live Telemetry",
+      "short_name": "Telemetry",
+      "url": "/#telemetry",
+      "icon": "https://dash.humid1.com/pwa-192x192.png"
+    },
+    {
+      "name": "Alarms & Alerts",
+      "short_name": "Alarms",
+      "url": "/#alarms",
+      "icon": "https://dash.humid1.com/pwa-192x192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://dash.humid1.com/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": false
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true
+}
