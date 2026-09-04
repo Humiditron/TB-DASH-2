@@ -18,7 +18,8 @@ import {
   EyeOff,
   Terminal,
   HelpCircle,
-  Play
+  Play,
+  Info
 } from 'lucide-react';
 import { AuthModal } from './AuthModal';
 import { ApiInspectorModal } from './ApiInspectorModal';
@@ -299,11 +300,23 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
           </button>
 
           <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 font-mono">
-            <span>Authenticates through ThingsBoard OAuth2</span>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.removeItem('humid1_dev_warning_dismissed');
+                  window.location.reload();
+                } catch {}
+              }}
+              className="text-slate-500 hover:text-amber-400 flex items-center gap-1 cursor-pointer transition-colors"
+              title="Reset & show pre-release active development warning notice"
+            >
+              <Info className="w-3 h-3" /> Dev Info Notice
+            </button>
             <button
               type="button"
               onClick={handleAuthentikLogin}
-              className="text-amber-400 hover:underline flex items-center gap-1"
+              className="text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
               title="Direct Authentik OIDC flow"
             >
               Direct Authentik OIDC <ExternalLink className="w-3 h-3" />

@@ -82,8 +82,24 @@ class ThingsBoardService {
     // Check URL first for SSO redirects
     const urlTokens = extractTokensFromUrl();
     if (urlTokens.token) {
-      this.authToken = urlTokens.token;
-      this.refreshToken = urlTokens.refreshToken;
+      const token = urlTokens.token.trim();
+      const refresh = urlTokens.refreshToken ? urlTokens.refreshToken.trim() : null;
+      this.authToken = token;
+      this.refreshToken = refresh;
+
+      // Save to localStorage immediately so it's fully persistent
+      try {
+        localStorage.setItem('humid1_active_jwt', token);
+        localStorage.setItem('humid1_tb_jwt_token', token);
+        localStorage.setItem('tb_token', token);
+        if (refresh) {
+          localStorage.setItem('humid1_active_refresh_token', refresh);
+          localStorage.setItem('humid1_tb_jwt_refresh', refresh);
+        }
+      } catch (err) {
+        console.error('[ThingsBoard] Failed to save URL tokens to localStorage:', err);
+      }
+
       cleanUrlAfterAuth();
     } else {
       this.authToken = this.findAutomaticJwt();
@@ -94,6 +110,11 @@ class ThingsBoardService {
       this.extractProfileFromJwt(this.authToken);
     }
     this.initOpenApiClient();
+
+    // Explicitly boot backend services if authenticated to fetch devices and profile
+    if (this.getEffectiveToken()) {
+      this.initRealBackend();
+    }
   }
 
   /**
