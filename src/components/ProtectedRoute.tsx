@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { thingsboard, UserProfile } from '../services/thingsboard';
 import { getResolvedOidcParams } from '../services/oidcConfig';
@@ -30,13 +30,12 @@ interface ProtectedRouteProps {
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const auth = useAuth();
-  const [activeToken, setActiveToken] = useState<string | null>(thingsboard.getAuthToken());
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(thingsboard.getCurrentUser());
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showDirectLogin, setShowDirectLogin] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnosticsTab, setDiagnosticsTab] = useState<'logs' | 'token'>('logs');
   const [txCount, setTxCount] = useState(0);
+  const [tbAuthVersion, setTbAuthVersion] = useState(0);
 
   // Direct login form state
   const [username, setUsername] = useState('');
@@ -45,43 +44,62 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const [directTokenInput, setDirectTokenInput] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
 
   const oidcParams = getResolvedOidcParams();
 
+  // Safety timeout for OIDC initialization (max 1.5s) to avoid preview hang if auth server is unreachable
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAuthChecking(false);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Track transaction count for live indicator
   useEffect(() => {
-    const unsub = apiLogger.subscribe((txs) => setTxCount(txs.length));
-    return unsub;
-  }, []);
-
-  // Check on load if native ThingsBoard token exists or was returned in URL
-  useEffect(() => {
-    const discovered = thingsboard.findAutomaticJwt();
-    if (discovered) {
-      setActiveToken(discovered);
-    }
-  }, []);
-
-  // Synchronize Authentik OIDC profile without injecting external token into ThingsBoard
-  useEffect(() => {
-    if (auth.isAuthenticated && auth.user?.profile) {
-      setUserProfile({
-        id: (auth.user.profile.sub as string) || 'oidc-user',
-        name: auth.user.profile.name || auth.user.profile.preferred_username || auth.user.profile.email || 'Humid1 User',
-        email: auth.user.profile.email || 'user@humid1.com',
-        role: 'Authenticated User',
-      });
-    }
-  }, [auth.isAuthenticated, auth.user]);
-
-  // Subscribe to Thingsboard internal auth changes
-  useEffect(() => {
-    const unsub = thingsboard.subscribeAuth((profile, token) => {
-      setUserProfile(profile);
-      setActiveToken(token);
+    const unsub = apiLogger.subscribe((txs) => {
+      setTxCount((prev) => (prev === txs.length ? prev : txs.length));
     });
     return unsub;
   }, []);
+
+  // Check on load if demo requested in URL params
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('demo') === 'true' || params.get('preview') === 'true') {
+        thingsboard.enableDemoMode();
+      }
+    }
+  }, []);
+
+  // Subscribe to ThingsBoard auth changes to force re-render when token/profile updates
+  useEffect(() => {
+    const unsub = thingsboard.subscribeAuth(() => {
+      setTbAuthVersion((v) => v + 1);
+    });
+    return unsub;
+  }, []);
+
+  const isAuth = auth.isAuthenticated;
+  const oidcSub = auth.user?.profile?.sub;
+  const oidcEmail = auth.user?.profile?.email;
+  const oidcName = auth.user?.profile?.name || auth.user?.profile?.preferred_username;
+
+  const tbProfile = thingsboard.getCurrentUser();
+  const userProfile =
+    tbProfile ||
+    (isAuth && (oidcSub || oidcEmail)
+      ? {
+          id: (oidcSub as string) || 'oidc-user',
+          name: oidcName || oidcEmail || 'Humid1 User',
+          email: oidcEmail || 'user@humid1.com',
+          role: 'Authenticated User',
+        }
+      : null);
+
+  const activeToken = thingsboard.getAuthToken();
 
   const openDiagnosticsModal = (tab: 'logs' | 'token' = 'logs') => {
     setDiagnosticsTab(tab);
@@ -154,10 +172,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   };
 
 
-  const isUserAuthenticated = Boolean(auth.isAuthenticated || activeToken);
+  const isUserAuthenticated = Boolean(auth.isAuthenticated || activeToken || thingsboard.isDemoMode());
 
-  // Show loading during initial OIDC session check
-  if (auth.isLoading) {
+  const handleEnterDemo = () => {
+    thingsboard.enableDemoMode();
+    setTbAuthVersion((v) => v + 1);
+  };
+
+  // Show loading during initial OIDC session check (bounded by authChecking timeout)
+  if (auth.isLoading && authChecking) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 text-slate-100 font-sans">
         <div className="flex flex-col items-center max-w-sm text-center space-y-4">
@@ -264,6 +287,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
           >
             <ShieldCheck className="w-4 h-4" />
             <span>Sign In with ThingsBoard SSO (Authentik)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleEnterDemo}
+            className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-amber-500/40 text-amber-300 font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <Play className="w-3.5 h-3.5 fill-current" />
+            <span>Explore Live Dashboard (Sandbox / Demo Mode)</span>
           </button>
 
           <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 font-mono">

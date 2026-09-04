@@ -67,14 +67,17 @@ export const ApiInspectorModal: React.FC<ApiInspectorModalProps> = ({
   // Subscribe to API transactions
   useEffect(() => {
     if (!isOpen) return;
+    const initialTxs = apiLogger.getTransactions();
+    setTransactions(initialTxs);
+    if (initialTxs.length > 0) {
+      setSelectedTxId((prev) => prev || initialTxs[0].id);
+    }
     const unsubscribe = apiLogger.subscribe((txs) => {
-      setTransactions(txs);
-      if (txs.length > 0 && !selectedTxId) {
-        setSelectedTxId(txs[0].id);
-      }
+      setTransactions((prev) => (prev.length === txs.length ? prev : txs));
+      setSelectedTxId((prev) => prev || (txs.length > 0 ? txs[0].id : null));
     });
     return unsubscribe;
-  }, [isOpen, selectedTxId]);
+  }, [isOpen]);
 
   // Refresh current token state when modal opens
   useEffect(() => {

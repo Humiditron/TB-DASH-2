@@ -68,15 +68,45 @@ export const HeaderTicker: React.FC<HeaderTickerProps> = ({
     (currentUser ? currentUser.email.split('@')[0] : null);
   const isAuth = auth.isAuthenticated || !!currentUser;
 
-  const handleAuthClick = () => {
+  const handleAuthClick = async () => {
+    if (isDemoMode) {
+      await thingsboard.disableDemoMode();
+      if (typeof window !== 'undefined') {
+        window.location.href = window.location.origin + window.location.pathname;
+      }
+      return;
+    }
+
     if (isAuth) {
-      if (confirm(`Sign out of Authentik SSO (${auth.user?.profile?.email || currentUser?.email || authUsername})?`)) {
+      try {
+        // ALWAYS clear the ThingsBoard session locally first
+        await thingsboard.logout();
+      } catch (err) {
+        console.warn('ThingsBoard logout failed:', err);
+      }
+
+      if (auth.isAuthenticated) {
         try {
-          auth.removeUser();
-          auth.signoutRedirect();
-        } catch {
-          thingsboard.setAuthSession(null);
+          await auth.removeUser();
+        } catch (err) {
+          console.warn('OIDC removeUser failed:', err);
         }
+      }
+
+      // Deep-clean storage to guarantee all credentials and sessions are completely wiped
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.clear();
+          localStorage.removeItem('tb_token');
+          localStorage.removeItem('humid1_active_jwt');
+          localStorage.removeItem('humid1_active_refresh_token');
+          localStorage.removeItem('humid1_tb_jwt_token');
+          localStorage.removeItem('humid1_tb_jwt_refresh');
+        } catch {
+          // ignore
+        }
+        // Redirect to a clean origin path to force a clean reload and show the auth gate immediately
+        window.location.href = window.location.origin + window.location.pathname;
       }
     } else {
       auth.signinRedirect();

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { thingsboard } from '../services/thingsboard';
 import {
   Activity,
   RefreshCw,
@@ -82,6 +83,12 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
     []
   );
 
+  const handleUnauthorized = useCallback(() => {
+    if (!thingsboard.isDemoMode()) {
+      setShowLoginModal((prev) => (prev ? prev : true));
+    }
+  }, []);
+
   const {
     device,
     telemetry,
@@ -98,9 +105,7 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
     deviceId,
     keys: requestedKeys,
     pollIntervalMs: pollIntervalSec * 1000,
-    onUnauthorized: () => {
-      setShowLoginModal(true);
-    },
+    onUnauthorized: handleUnauthorized,
   });
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -546,6 +551,13 @@ export const HumidorTelemetryWidget: React.FC<HumidorTelemetryWidgetProps> = ({
             <p className="text-xs text-slate-400 mb-4">
               Authenticate via the built-in ThingsBoard <code className="text-amber-300 font-mono">/api/auth/login</code> helper or paste a direct JWT Bearer token override.
             </p>
+
+            {thingsboard.isDemoMode() && (
+              <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-200">
+                <span className="font-bold text-amber-300 block mb-0.5">Demo Sandbox Mode Active</span>
+                <p className="text-[11px] text-amber-300/80">Session authentication is automatically bypassed in Demo Mode. Real server credentials are not required.</p>
+              </div>
+            )}
 
             <form onSubmit={handleLoginSubmit} className="space-y-3.5">
               <div>

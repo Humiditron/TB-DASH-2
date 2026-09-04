@@ -207,15 +207,38 @@ jobs:
 
       - name: Build Android TWA Project with Bubblewrap
         run: |
-          cp twa-manifest.json android-build/
+          # Start local web server for runner asset resolution (bypasses firewall)
+          python3 -m http.server 8080 --directory dist &
+          SERVER_PID=$!
+          sleep 2
+          
+          # Prepare local twa-manifest for build and compile
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("twa-manifest.json", "utf8"));
+            manifest.iconUrl = "http://localhost:8080/pwa-512x512.png";
+            manifest.maskableIconUrl = "http://localhost:8080/pwa-maskable-512x512.png";
+            manifest.webManifestUrl = "http://localhost:8080/manifest.webmanifest";
+            if (manifest.shortcuts) {
+              manifest.shortcuts.forEach(s => { s.chosenIconUrl = "http://localhost:8080/pwa-192x192.png"; });
+            }
+            manifest.host = "dash.humid1.com";
+            manifest.startUrl = "/";
+            fs.writeFileSync("android-build/twa-manifest.json", JSON.stringify(manifest, null, 2));
+          '
           cd android-build
           bubblewrap build --manifest=twa-manifest.json --skipPwaValidation
+          kill $SERVER_PID || true
 
       - name: Build Android App Bundle (.aab)
         if: github.event.inputs.build_bundle != 'false'
         run: |
+          python3 -m http.server 8080 --directory dist &
+          SERVER_PID=$!
+          sleep 2
           cd android-build
           bubblewrap build --manifest=twa-manifest.json --skipPwaValidation --bundle || true
+          kill $SERVER_PID || true
 
       - name: Upload APK & AAB Artifacts
         uses: actions/upload-artifact@v4

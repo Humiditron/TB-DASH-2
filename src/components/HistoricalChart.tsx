@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { HumidorDevice, TempUnit, HistoricalTelemetryPoint } from '../types';
 import { thingsboard } from '../services/thingsboard';
 import {
@@ -34,6 +34,11 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
   // Range hours bounded by 7-Day Server Retention Policy (SQL_DATA_RETENTION_TTL=604800s / 168h max)
   const rangeHours = range === '12h' ? 12 : range === '24h' ? 24 : range === '3d' ? 72 : 168;
 
+  const telemetryRef = useRef(device?.telemetry);
+  useEffect(() => {
+    telemetryRef.current = device?.telemetry;
+  }, [device?.telemetry]);
+
   const loadHistory = useCallback(async () => {
     if (!device?.id) return;
     setIsLoading(true);
@@ -43,10 +48,11 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
         setHistoryData(points);
       } else {
         // Fallback: Generate points anchoring to current real telemetry if database has no history
-        const liveTs = device.telemetry?.timestamp || Date.now();
-        const liveRh = device.telemetry?.rh || 68;
-        const liveTemp = device.telemetry?.temp || 70;
-        const liveBatt = device.telemetry?.battery || 100;
+        const currentTelemetry = telemetryRef.current;
+        const liveTs = currentTelemetry?.timestamp || Date.now();
+        const liveRh = currentTelemetry?.rh || 68;
+        const liveTemp = currentTelemetry?.temp || 70;
+        const liveBatt = currentTelemetry?.battery || 100;
 
         const generated: HistoricalTelemetryPoint[] = [];
         const count = range === '12h' ? 12 : range === '24h' ? 16 : range === '3d' ? 20 : 28;
@@ -85,7 +91,7 @@ export const HistoricalChart: React.FC<HistoricalChartProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [device?.id, device?.telemetry?.rh, device?.telemetry?.temp, device?.telemetry?.timestamp, rangeHours, range]);
+  }, [device?.id, rangeHours, range]);
 
   useEffect(() => {
     loadHistory();

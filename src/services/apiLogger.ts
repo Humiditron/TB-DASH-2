@@ -38,7 +38,6 @@ class ApiLoggerService {
 
   public subscribe(listener: (transactions: ApiTransaction[]) => void): () => void {
     this.listeners.push(listener);
-    listener([...this.transactions]);
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
     };

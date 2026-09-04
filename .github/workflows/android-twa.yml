@@ -93,12 +93,43 @@ jobs:
           BUBBLEWRAP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'humid1-key' }}
           BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASS || 'humid1pass' }}
         run: |
-          # Copy twa-manifest.json to working build directory
-          cp twa-manifest.json android-build/
+          # 1. Start local web server serving built dist/ folder on port 8080
+          python3 -m http.server 8080 --directory dist &
+          SERVER_PID=$!
+          sleep 2
+          
+          # 2. Prepare local twa-manifest.json pointing icon/manifest URLs to localhost:8080
+          # This allows Bubblewrap to download icons locally without hitting firewalled external server
+          mkdir -p android-build
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("twa-manifest.json", "utf8"));
+            
+            // Rewrite asset fetch URLs to local runner server
+            manifest.iconUrl = "http://localhost:8080/pwa-512x512.png";
+            manifest.maskableIconUrl = "http://localhost:8080/pwa-maskable-512x512.png";
+            manifest.webManifestUrl = "http://localhost:8080/manifest.webmanifest";
+            if (manifest.shortcuts) {
+              manifest.shortcuts.forEach(s => {
+                s.chosenIconUrl = "http://localhost:8080/pwa-192x192.png";
+              });
+            }
+            
+            // Ensure runtime host & startUrl still point to production domain
+            manifest.host = "dash.humid1.com";
+            manifest.startUrl = "/";
+            
+            fs.writeFileSync("android-build/twa-manifest.json", JSON.stringify(manifest, null, 2));
+            console.log("Generated local build twa-manifest.json for Bubblewrap successfully");
+          '
+          
           cd android-build
           
-          # Initialize project structure from twa-manifest if needed and build
+          # 3. Build APK with Bubblewrap
           bubblewrap build --manifest=twa-manifest.json --skipPwaValidation
+          
+          # 4. Stop local server
+          kill $SERVER_PID || true
 
       - name: Build Android App Bundle (.aab) for Google Play Store
         if: github.event.inputs.build_bundle != 'false'
@@ -108,8 +139,14 @@ jobs:
           BUBBLEWRAP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'humid1-key' }}
           BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASS || 'humid1pass' }}
         run: |
+          python3 -m http.server 8080 --directory dist &
+          SERVER_PID=$!
+          sleep 2
+
           cd android-build
           bubblewrap build --manifest=twa-manifest.json --skipPwaValidation --bundle || echo "Bundle generation complete or skipped"
+          
+          kill $SERVER_PID || true
 
       - name: Rename and Stage Artifacts
         run: |

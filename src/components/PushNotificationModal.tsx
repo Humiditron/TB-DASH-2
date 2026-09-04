@@ -35,7 +35,7 @@ export const PushNotificationModal: React.FC<PushNotificationModalProps> = ({
 
   useEffect(() => {
     return pushNotifications.subscribe((perm) => {
-      setPermission(perm);
+      setPermission((prev) => (prev === perm ? prev : perm));
     });
   }, []);
 

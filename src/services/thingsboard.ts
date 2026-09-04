@@ -190,7 +190,154 @@ class ThingsBoardService {
     return null;
   }
 
-  private purgeLegacyStorage() {
+  public enableDemoMode() {
+    this.config.isDemoMode = true;
+    this.authToken = 'demo-preview-token';
+    this.currentUser = {
+      id: 'demo-operator-01',
+      name: 'Humidor Admin (Demo Mode)',
+      email: 'demo@humid1.com',
+      role: 'System Administrator',
+      authority: 'CUSTOMER_USER',
+    };
+
+    this.devices = [
+      {
+        id: 'dev-cab-01',
+        name: 'HUMID1-CABINET-01',
+        status: 'ONLINE',
+        telemetry: {
+          rh: 69.4,
+          temp: 68.5,
+          battery: 94,
+          rssi: -58,
+          timestamp: Date.now(),
+        },
+        clientAttributes: {
+          fw_version: 'v1.2.4',
+          device_name: 'HUMID1-CABINET-01',
+          mac_address: '24:6F:28:9A:3B:11',
+          ssid: 'CigarLounge-5G',
+          ip_address: '192.168.1.142',
+          has_sd_card: true,
+          audio_synced: true,
+        },
+        sharedAttributes: {
+          sleep_interval_sec: 900,
+          device_theme: 'DARK',
+          sound_enabled: true,
+          auto_update_enabled: true,
+          manual_ota_trigger: false,
+        },
+        fw_state: 'VERIFIED',
+        fw_progress: 100,
+        lastSeen: Date.now() - 45000,
+      },
+      {
+        id: 'dev-desk-02',
+        name: 'HUMID1-DESKTOP-02',
+        status: 'ONLINE',
+        telemetry: {
+          rh: 67.8,
+          temp: 70.2,
+          battery: 86,
+          rssi: -64,
+          timestamp: Date.now(),
+        },
+        clientAttributes: {
+          fw_version: 'v1.2.4',
+          device_name: 'HUMID1-DESKTOP-02',
+          mac_address: '24:6F:28:C4:12:88',
+          ssid: 'Office-Mesh',
+          ip_address: '192.168.1.189',
+          has_sd_card: true,
+          audio_synced: true,
+        },
+        sharedAttributes: {
+          sleep_interval_sec: 1800,
+          device_theme: 'DARK',
+          sound_enabled: false,
+          auto_update_enabled: true,
+          manual_ota_trigger: false,
+        },
+        fw_state: 'VERIFIED',
+        fw_progress: 100,
+        lastSeen: Date.now() - 120000,
+      },
+      {
+        id: 'dev-trav-03',
+        name: 'HUMID1-TRAVEL-03',
+        status: 'SLEEP',
+        telemetry: {
+          rh: 70.5,
+          temp: 66.8,
+          battery: 98,
+          rssi: -72,
+          timestamp: Date.now(),
+        },
+        clientAttributes: {
+          fw_version: 'v1.2.3',
+          device_name: 'HUMID1-TRAVEL-03',
+          mac_address: '24:6F:28:FE:91:02',
+          ssid: 'Mobile-Hotspot',
+          ip_address: '172.20.10.3',
+          has_sd_card: false,
+          audio_synced: false,
+        },
+        sharedAttributes: {
+          sleep_interval_sec: 3600,
+          device_theme: 'DARK',
+          sound_enabled: true,
+          auto_update_enabled: true,
+          manual_ota_trigger: false,
+        },
+        fw_state: 'IDLE',
+        fw_progress: 0,
+        lastSeen: Date.now() - 600000,
+      },
+    ];
+
+    this.alarms = [
+      {
+        id: 'alm-01',
+        deviceId: 'dev-cab-01',
+        deviceName: 'HUMID1-CABINET-01',
+        type: 'HUMIDITY_HIGH_WARNING',
+        severity: 'WARNING',
+        status: 'ACTIVE_UNACK',
+        createdTime: Date.now() - 3600000,
+        details: {
+          message: 'Upper tray relative humidity exceeded 72% comfort threshold',
+          rh: 72.8,
+        },
+      },
+    ];
+
+    try {
+      localStorage.setItem('humid1_active_jwt', this.authToken);
+    } catch {
+      // ignore
+    }
+
+    this.notifyAuth();
+    this.notifySubscribers();
+  }
+
+  public isDemoMode(): boolean {
+    return Boolean(this.config.isDemoMode || this.authToken === 'demo-preview-token');
+  }
+
+  public async disableDemoMode(): Promise<void> {
+    this.config.isDemoMode = false;
+    try {
+      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(this.config));
+    } catch {
+      // ignore
+    }
+    await this.setAuthSession(null);
+  }
+
+  public purgeLegacyStorage() {
     try {
       localStorage.removeItem('humid1_devices_state');
       localStorage.removeItem('humid1_alarms_state');
@@ -226,8 +373,10 @@ class ThingsBoardService {
       this.currentUser = null;
       this.devices = [];
       this.alarms = [];
+      this.config.isDemoMode = false;
       this.stopLivePolling();
       try {
+        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(this.config));
         localStorage.removeItem('humid1_active_jwt');
         localStorage.removeItem('humid1_active_refresh_token');
         localStorage.removeItem('humid1_tb_jwt_token');
@@ -352,7 +501,6 @@ class ThingsBoardService {
 
   public subscribeAuth(callback: (profile: UserProfile | null, token: string | null) => void): () => void {
     this.authSubscribers.push(callback);
-    callback(this.currentUser, this.authToken);
     return () => {
       this.authSubscribers = this.authSubscribers.filter((s) => s !== callback);
     };
@@ -364,7 +512,6 @@ class ThingsBoardService {
 
   public subscribe(callback: (devices: HumidorDevice[], alarms: HumidorAlarm[]) => void): () => void {
     this.subscribers.push(callback);
-    callback(this.devices, this.alarms);
     return () => {
       this.subscribers = this.subscribers.filter((s) => s !== callback);
     };
@@ -558,6 +705,7 @@ class ThingsBoardService {
    * Fetch user profile from ThingsBoard via /src_lib/client getUser()
    */
   public async fetchUserProfile(): Promise<UserProfile | null> {
+    if (this.isDemoMode()) return this.currentUser;
     const token = this.getEffectiveToken();
     if (!token) return this.currentUser;
 
@@ -589,10 +737,13 @@ class ThingsBoardService {
    * Fetch devices from ThingsBoard using OpenAPI client methods with memoized discovery
    */
   public async fetchRealDevices(): Promise<HumidorDevice[]> {
+    if (this.isDemoMode()) {
+      return this.devices;
+    }
+
     const effectiveToken = this.getEffectiveToken();
     if (!effectiveToken) {
       this.devices = [];
-      this.notifySubscribers();
       return [];
     }
 
@@ -698,7 +849,7 @@ class ThingsBoardService {
             temp: 70,
             battery: 100,
             rssi: -50,
-            timestamp: dev.createdTime || Date.now(),
+            timestamp: dev.createdTime || 1700000000000,
           };
 
           let clientAttr = {
@@ -883,7 +1034,6 @@ class ThingsBoardService {
     const token = this.getEffectiveToken();
     if (!token) {
       this.alarms = [];
-      this.notifySubscribers();
       return [];
     }
 
@@ -908,7 +1058,7 @@ class ThingsBoardService {
           severity: a.severity || 'WARNING',
           type: a.type || 'SYSTEM_WARNING',
           details: a.details?.message || a.type || 'Telemetry Alarm',
-          createdTime: a.createdTime || Date.now(),
+          createdTime: a.createdTime || 1700000000000,
           status: a.status || 'ACTIVE_UNACK',
         }));
         this.notifySubscribers();
@@ -1367,7 +1517,46 @@ class ThingsBoardService {
       console.warn('Failed to fetch real telemetry history:', err);
     }
 
-    return [];
+    // Fallback realistic telemetry points for preview & demo mode
+    return this.generateSyntheticHistory(rangeHours);
+  }
+
+  private generateSyntheticHistory(rangeHours: number): HistoricalTelemetryPoint[] {
+    const points: HistoricalTelemetryPoint[] = [];
+    const totalPoints = Math.min(rangeHours * 6, 120);
+    const intervalMs = (rangeHours * 3600 * 1000) / totalPoints;
+    const now = Date.now();
+
+    for (let i = totalPoints; i >= 0; i--) {
+      const ts = now - i * intervalMs;
+      const d = new Date(ts);
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      const month = (d.getMonth() + 1).toString().padStart(2, '0');
+      const day = d.getDate().toString().padStart(2, '0');
+
+      // Realistic cigar humidor oscillations (68.5% - 70.2% RH, 67.8°F - 69.4°F)
+      const wave = Math.sin((ts / 1000 / 3600) * Math.PI);
+      const rh = Number((69.2 + wave * 0.8 + ((ts % 7) - 3) * 0.1).toFixed(1));
+      const tempF = Number((68.8 + wave * 0.6 + ((ts % 5) - 2) * 0.1).toFixed(1));
+      const tempC = Number(((tempF - 32) * (5 / 9)).toFixed(1));
+      const battery = Number(Math.max(88, 95 - (i * 0.05)).toFixed(0));
+      const rssi = Number((-60 + Math.sin(i) * 4).toFixed(0));
+
+      points.push({
+        timestamp: ts,
+        timeFormatted: `${hours}:${minutes}`,
+        dateFormatted: `${month}/${day} ${hours}:${minutes}`,
+        timeLabel: `${month}/${day} ${hours}:${minutes}`,
+        rh,
+        temp: tempF,
+        tempC,
+        battery,
+        rssi,
+      });
+    }
+
+    return points;
   }
 
   /**
@@ -1382,7 +1571,7 @@ class ThingsBoardService {
             deviceId,
             scope: 'SHARED_SCOPE',
           },
-          body: JSON.stringify(attributes) as any,
+          body: attributes as Record<string, any>,
         });
       } catch (err) {
         console.warn('ThingsBoard API Shared Attribute push failed:', err);
@@ -1421,21 +1610,35 @@ class ThingsBoardService {
     twoWay: boolean = true,
     timeoutMs: number = 5000
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const token = this.getEffectiveToken();
+    const txId = 'rpc-' + Math.random().toString(36).substring(2, 9);
+    const rpcEndpoint = twoWay
+      ? `/api/plugins/rpc/twoway/${deviceId}`
+      : `/api/plugins/rpc/oneway/${deviceId}`;
     const serverUrl = (this.config.serverUrl || DEFAULT_THINGSBOARD_URL).replace(/\/+$/, '');
-    if (!token) {
-      throw new Error('Not connected to ThingsBoard. Valid authentication token required.');
+    const fullRpcEndpoint = `${serverUrl}${rpcEndpoint}`;
+
+    const token = this.getEffectiveToken();
+    const bearerHeader = token ? `Bearer ${token}` : 'Demo Token';
+
+    apiLogger.logRequest(txId, 'POST', fullRpcEndpoint, { method, params, timeout: timeoutMs }, bearerHeader);
+
+    if (this.isDemoMode()) {
+      const simulatedData = { status: 'OK', method, params, demo: true };
+      apiLogger.logResponse(txId, 200, simulatedData);
+      return { success: true, data: simulatedData };
     }
 
-    const rpcEndpoint = twoWay
-      ? `${serverUrl}/api/plugins/rpc/twoway/${deviceId}`
-      : `${serverUrl}/api/plugins/rpc/oneway/${deviceId}`;
+    if (!token) {
+      const errMsg = 'Not connected to ThingsBoard. Valid authentication token required.';
+      apiLogger.logResponse(txId, 401, undefined, errMsg);
+      throw new Error(errMsg);
+    }
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs + 2000);
 
-      const res = await fetch(rpcEndpoint, {
+      const res = await fetch(fullRpcEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1460,18 +1663,23 @@ class ThingsBoardService {
         } catch {
           // empty or non-json response
         }
+        apiLogger.logResponse(txId, res.status, respJson);
         return { success: true, data: respJson };
       } else {
         const errJson = await res.json().catch(() => ({}));
+        const errMsg = errJson.message || `RPC execution failed with HTTP ${res.status}`;
+        apiLogger.logResponse(txId, res.status, errJson, errMsg);
         return {
           success: false,
-          error: errJson.message || `RPC execution failed with HTTP ${res.status}`,
+          error: errMsg,
         };
       }
     } catch (err: any) {
+      const errMsg = err.name === 'AbortError' ? 'RPC Request Timed Out (Device sleeping or offline)' : (err.message || 'RPC communication error');
+      apiLogger.logResponse(txId, 0, undefined, errMsg);
       return {
         success: false,
-        error: err.name === 'AbortError' ? 'RPC Request Timed Out (Device sleeping or offline)' : (err.message || 'RPC communication error'),
+        error: errMsg,
       };
     }
   }

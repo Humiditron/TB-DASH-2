@@ -13,6 +13,7 @@ import {
 } from '@enerlab/thingsboard-client/zod';
 import { z } from 'zod';
 import { normalizeBearerToken, applyThingsBoardClientAuth } from '../utils/authTokens';
+import { thingsboard } from './thingsboard';
 
 export type TBClientInstance = typeof client;
 
@@ -115,6 +116,18 @@ export async function fetchDevice(
   deviceId: string,
   customClient: TBClientInstance = client
 ): Promise<Device> {
+  if (thingsboard.isDemoMode()) {
+    const devices = thingsboard.getDevices();
+    const found = devices.find((d) => d.id === deviceId);
+    return {
+      id: { id: deviceId, entityType: 'DEVICE' },
+      name: found?.name || 'HUMID1-CABINET-01',
+      type: 'HUMIDOR_PRECISION_SENSOR',
+      label: found?.name || 'Master Humidor Cabinet',
+      createdTime: Date.now() - 864000000,
+    } as unknown as Device;
+  }
+
   try {
     const response = await getDeviceById({
       client: customClient as any,
@@ -145,6 +158,23 @@ export async function fetchLatestTelemetry(
   keys?: string[],
   customClient: TBClientInstance = client
 ): Promise<LatestTelemetryMap> {
+  if (thingsboard.isDemoMode()) {
+    const devices = thingsboard.getDevices();
+    const target = devices.find((d) => d.id === deviceId) || devices[0];
+    const now = Date.now();
+    const tel = target?.telemetry || { rh: 69.4, temp: 68.5, battery: 94, rssi: -58 };
+    return {
+      rh: { ts: now, value: tel.rh },
+      humidity: { ts: now, value: tel.rh },
+      temp: { ts: now, value: tel.temp },
+      temperature: { ts: now, value: tel.temp },
+      battery: { ts: now, value: tel.battery },
+      rssi: { ts: now, value: tel.rssi },
+      targetHumidity: { ts: now, value: 70 },
+      target_humidity: { ts: now, value: 70 },
+    };
+  }
+
   const queryObj: any = {
     useStrictDataTypes: true,
   };
@@ -202,6 +232,21 @@ export async function fetchTelemetryHistory(
   limit: number = 100,
   customClient: TBClientInstance = client
 ): Promise<Record<string, TelemetryHistoryPoint[]>> {
+  if (thingsboard.isDemoMode()) {
+    const output: Record<string, TelemetryHistoryPoint[]> = {};
+    const step = Math.max(1000, Math.floor((endTs - startTs) / Math.min(limit, 50)));
+    for (const k of keys) {
+      const arr: TelemetryHistoryPoint[] = [];
+      let baseVal = k.includes('temp') ? 68.5 : k.includes('battery') ? 94 : 69.4;
+      for (let t = startTs; t <= endTs; t += step) {
+        baseVal += (Math.random() - 0.5) * 0.4;
+        arr.push({ ts: t, value: Number(baseVal.toFixed(1)) });
+      }
+      output[k] = arr;
+    }
+    return output;
+  }
+
   const response = await getLatestTimeseries({
     client: customClient as any,
     path: {

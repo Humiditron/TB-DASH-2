@@ -58,7 +58,6 @@ class PushNotificationManager {
 
   public subscribe(listener: (perm: NotificationPermissionState) => void): () => void {
     this.listeners.push(listener);
-    listener(this.getPermission());
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
     };

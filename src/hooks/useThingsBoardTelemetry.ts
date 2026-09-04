@@ -50,13 +50,25 @@ export function useThingsBoardTelemetry({
   const packetArrivedTimeoutRef = useRef<any>(null);
   const deviceLoadedForId = useRef<string | null>(null);
 
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  useEffect(() => {
+    onUnauthorizedRef.current = onUnauthorized;
+  }, [onUnauthorized]);
+
+  const keysString = keys ? keys.join(',') : '';
+
+  const prevDeviceIdRef = useRef<string>(deviceId);
+
   // Reset telemetry cache when active device changes
   useEffect(() => {
-    lastKnownPayloadTsRef.current = 0;
-    setTelemetry({});
-    setLastUpdated(null);
-    setIsDeviceSleeping(false);
-    setNewPacketArrived(false);
+    if (prevDeviceIdRef.current !== deviceId) {
+      prevDeviceIdRef.current = deviceId;
+      lastKnownPayloadTsRef.current = 0;
+      setTelemetry({});
+      setLastUpdated(null);
+      setIsDeviceSleeping(false);
+      setNewPacketArrived(false);
+    }
   }, [deviceId]);
 
   // 1. Initial Device Metadata Load (Fetched only once per deviceId)
@@ -97,6 +109,9 @@ export function useThingsBoardTelemetry({
 
       try {
         setError(null);
+        if (force && lastKnownPayloadTsRef.current === 0) {
+          setLoading(true);
+        }
         const telemetryData = await fetchLatestTelemetry(deviceId, keys);
 
         if (!isMountedRef.current) return;
@@ -114,11 +129,11 @@ export function useThingsBoardTelemetry({
         setLastCheckedTs(now);
 
         const isInitial = lastKnownPayloadTsRef.current === 0;
-        const isNewData = latestPayloadTs > lastKnownPayloadTsRef.current;
+        const isNewData = latestPayloadTs > 0 && latestPayloadTs > lastKnownPayloadTsRef.current;
 
         // ONLY refresh live data if new data actually arrived on ThingsBoard
         if (isInitial || isNewData) {
-          lastKnownPayloadTsRef.current = latestPayloadTs;
+          lastKnownPayloadTsRef.current = latestPayloadTs > 0 ? latestPayloadTs : -1;
           setTelemetry(telemetryData);
           setLastUpdated(latestPayloadTs > 0 ? latestPayloadTs : now);
 
@@ -144,30 +159,30 @@ export function useThingsBoardTelemetry({
       } catch (err: any) {
         if (!isMountedRef.current) return;
         const msg = err.message || 'Error fetching telemetry from ThingsBoard';
-        setError(msg);
+        setError((prev) => (prev === msg ? prev : msg));
         setLoading(false);
 
-        if (msg.includes('THINGSBOARD_UNAUTHORIZED') && onUnauthorized) {
-          onUnauthorized();
+        if (msg.includes('THINGSBOARD_UNAUTHORIZED')) {
+          setIsPaused((prev) => (prev ? prev : true));
+          if (onUnauthorizedRef.current) {
+            onUnauthorizedRef.current();
+          }
         }
       }
     },
-    [deviceId, keys, onUnauthorized]
+    [deviceId, keysString]
   );
 
   // 3. Polling lifecycle with tab visibility listening
   useEffect(() => {
     isMountedRef.current = true;
-    setLoading(true);
+
+    if (isPaused) {
+      return;
+    }
 
     // Immediate initial fetch
     loadTelemetry(true);
-
-    if (isPaused) {
-      return () => {
-        isMountedRef.current = false;
-      };
-    }
 
     const interval = setInterval(() => {
       loadTelemetry(false);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from 'react-oidc-context';
 import { HumidorDevice, HumidorAlarm, TempUnit } from './types';
 import { thingsboard, UserProfile } from './services/thingsboard';
@@ -22,11 +22,49 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { getEnv } from './utils/env';
 import { Flame, Cpu, Info, AlertTriangle, BellRing } from 'lucide-react';
 
+function areDevicesEqual(a: HumidorDevice[], b: HumidorDevice[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].name !== b[i].name ||
+      a[i].status !== b[i].status ||
+      a[i].telemetry?.rh !== b[i].telemetry?.rh ||
+      a[i].telemetry?.temp !== b[i].telemetry?.temp ||
+      a[i].telemetry?.battery !== b[i].telemetry?.battery ||
+      a[i].telemetry?.timestamp !== b[i].telemetry?.timestamp
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areAlarmsEqual(a: HumidorAlarm[], b: HumidorAlarm[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].status !== b[i].status ||
+      a[i].severity !== b[i].severity ||
+      a[i].createdTime !== b[i].createdTime
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export default function App() {
   const auth = useAuth();
-  const [devices, setDevices] = useState<HumidorDevice[]>([]);
-  const [alarms, setAlarms] = useState<HumidorAlarm[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [devices, setDevices] = useState<HumidorDevice[]>(() => thingsboard.getDevices());
+  const [alarms, setAlarms] = useState<HumidorAlarm[]>(() => thingsboard.getAlarms());
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
+    const initialDevices = thingsboard.getDevices();
+    return initialDevices.length > 0 ? initialDevices[0].id : '';
+  });
   const [tempUnit, setTempUnit] = useState<TempUnit>('F');
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -36,7 +74,7 @@ export default function App() {
   const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
   const [isDevWarningOpen, setIsDevWarningOpen] = useState(false);
   const [isPushModalOpen, setIsPushModalOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(thingsboard.getCurrentUser());
+  const [tbAuthVersion, setTbAuthVersion] = useState(0);
 
   const appTitle = getEnv('VITE_APP_TITLE', 'HUMID1_OS');
   const appDesc = getEnv('VITE_APP_DESCRIPTION', 'Precision Humidor Monitoring & Telemetry Stack');
@@ -53,44 +91,49 @@ export default function App() {
     }
   }, []);
 
-  // Synchronize Authentik OIDC profile without overwriting native ThingsBoard session
-  useEffect(() => {
-    if (auth.isAuthenticated && auth.user?.profile) {
-      // Keep UI profile in sync with Authentik user profile
-      const prof = auth.user.profile;
-      setCurrentUser({
-        id: prof.sub || 'oidc-user',
-        name: prof.name || prof.preferred_username || prof.email || 'Humid1 User',
-        email: prof.email || 'user@humid1.com',
-        role: 'Authenticated User',
-      });
-    }
-  }, [auth.isAuthenticated, auth.user]);
+  const isAuth = auth.isAuthenticated;
+  const oidcSub = auth.user?.profile?.sub;
+  const oidcEmail = auth.user?.profile?.email;
+  const oidcName = auth.user?.profile?.name || auth.user?.profile?.preferred_username;
+
+  const tbProfile = thingsboard.getCurrentUser();
+  const currentUser =
+    tbProfile ||
+    (isAuth && (oidcSub || oidcEmail)
+      ? {
+          id: (oidcSub as string) || 'oidc-user',
+          name: oidcName || oidcEmail || 'Humid1 User',
+          email: oidcEmail || 'user@humid1.com',
+          role: 'Authenticated User',
+        }
+      : null);
 
   useEffect(() => {
     const unsubDevices = thingsboard.subscribe((updatedDevices, updatedAlarms) => {
-      setDevices(updatedDevices);
-      setAlarms(updatedAlarms);
+      setDevices((prev) => (areDevicesEqual(prev, updatedDevices) ? prev : updatedDevices));
+      setAlarms((prev) => (areAlarmsEqual(prev, updatedAlarms) ? prev : updatedAlarms));
 
       // Select first device if none selected
-      if (!selectedDeviceId && updatedDevices.length > 0) {
-        setSelectedDeviceId(updatedDevices[0].id);
-      } else if (selectedDeviceId && !updatedDevices.some((d) => d.id === selectedDeviceId)) {
-        if (updatedDevices.length > 0) {
-          setSelectedDeviceId(updatedDevices[0].id);
+      setSelectedDeviceId((prevId) => {
+        if (!prevId && updatedDevices.length > 0) {
+          return updatedDevices[0].id;
         }
-      }
+        if (prevId && !updatedDevices.some((d) => d.id === prevId)) {
+          return updatedDevices[0]?.id || '';
+        }
+        return prevId;
+      });
     });
 
-    const unsubAuth = thingsboard.subscribeAuth((profile) => {
-      setCurrentUser(profile);
+    const unsubAuth = thingsboard.subscribeAuth(() => {
+      setTbAuthVersion((v) => v + 1);
     });
 
     return () => {
       unsubDevices();
       unsubAuth();
     };
-  }, [selectedDeviceId]);
+  }, []);
 
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || devices[0];
 
@@ -131,7 +174,7 @@ export default function App() {
             if (el) el.scrollIntoView({ behavior: 'smooth' });
           }}
           currentUser={currentUser}
-          isDemoMode={false}
+          isDemoMode={thingsboard.isDemoMode()}
         />
 
         {/* Main Content Area */}
