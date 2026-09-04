@@ -52,6 +52,12 @@ jobs:
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
+      # non-interactive fix for bubble wrap.
+      - name: Configure Bubblewrap Paths
+        run: |
+          mkdir -p ~/.bubblewrap
+          echo "{\"jdkPath\":\"$JAVA_HOME\",\"androidSdkPath\":\"$ANDROID_HOME\"}" > ~/.bubblewrap/config.json
+
       - name: Configure Keystore for Signing
         id: keystore
         env:
