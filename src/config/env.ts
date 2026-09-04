@@ -109,13 +109,22 @@ export function getThingsBoardOAuth2Url(
   customReturnUrl?: string,
   customProviderPath?: string
 ): string {
-  // Always target the main ThingsBoard server URL directly (e.g., https://app.humid1.com)
-  const base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
-  const returnUrl = customReturnUrl || getCurrentReturnUrl();
+  // Determine base dynamically: default to active origin in browser (for reverse proxy),
+  // or fall back to the configured ThingsBoard URL.
+  let base = '';
+  if (typeof window !== 'undefined') {
+    base = window.location.origin;
+  } else {
+    base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
+  }
+
   const providerPath = customProviderPath || APP_CONFIG.thingsboardOAuthProviderPath || '/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365';
   const cleanPath = providerPath.startsWith('/') ? providerPath : `/${providerPath}`;
   
-  // Use the callbackUrlScheme query parameter to instruct ThingsBoard's success handler
-  // to redirect the authenticated JwtPair back to our custom dashboard (dash.humid1.com)
-  return `${base}${cleanPath}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}&callbackUrlScheme=${encodeURIComponent(returnUrl)}`;
+  // Because of the strict security validation introduced in ThingsBoard Commit 1655cf9:
+  // 1. prevURI MUST be a relative path (e.g., '/') to prevent open-redirect rejections.
+  // 2. We trigger this on our proxied domain so ThingsBoard natively uses it as the baseUrl and redirects back to us.
+  const relativePrevUri = '/';
+  
+  return `${base}${cleanPath}?prevURI=${encodeURIComponent(relativePrevUri)}`;
 }
