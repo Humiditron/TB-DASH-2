@@ -109,18 +109,13 @@ export function getThingsBoardOAuth2Url(
   customReturnUrl?: string,
   customProviderPath?: string
 ): string {
-  let base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
-  
-  // Under the reverse-proxy method, OAuth2 requests go to the active custom dashboard origin (dash.humid1.com)
-  // so that ThingsBoard computes 'dash.humid1.com' as the baseUrl and redirects back with tokens.
-  if (typeof window !== 'undefined' && !serverUrl) {
-    if (window.location.hostname === 'dash.humid1.com' || window.location.hostname === 'localhost') {
-      base = window.location.origin;
-    }
-  }
-
+  // Always target the main ThingsBoard server URL directly (e.g., https://app.humid1.com)
+  const base = (serverUrl || APP_CONFIG.domains.thingsboardUrl).replace(/\/+$/, '');
   const returnUrl = customReturnUrl || getCurrentReturnUrl();
   const providerPath = customProviderPath || APP_CONFIG.thingsboardOAuthProviderPath || '/oauth2/authorization/1efd3960-a10b-11f1-b530-9b9631e0c365';
   const cleanPath = providerPath.startsWith('/') ? providerPath : `/${providerPath}`;
-  return `${base}${cleanPath}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}`;
+  
+  // Use the callbackUrlScheme query parameter to instruct ThingsBoard's success handler
+  // to redirect the authenticated JwtPair back to our custom dashboard (dash.humid1.com)
+  return `${base}${cleanPath}?redirect_uri=${encodeURIComponent(returnUrl)}&prevURI=${encodeURIComponent(returnUrl)}&returnUrl=${encodeURIComponent(returnUrl)}&callbackUrlScheme=${encodeURIComponent(returnUrl)}`;
 }
