@@ -125,6 +125,9 @@ jobs:
           
           cd android-build
           
+          # Generate native files and checksum non-interactively
+          yes | bubblewrap update          
+          
           # 3. Build APK with Bubblewrap
           bubblewrap build --manifest=twa-manifest.json --skipPwaValidation
           
