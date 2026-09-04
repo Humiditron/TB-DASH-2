@@ -11,6 +11,7 @@ HUMID1_OS is a modern, high-performance web dashboard built with React 18, TypeS
 ```
 ├── public/                 # Static assets, Web Manifest, Favicons, Runtime Config Placeholders
 ├── docs/                   # Architecture, App Specs, and Workflow Documentation
+│   ├── api_transaction_manifest.md  # Complete JSON transaction & payload reference manifest
 │   ├── app_spec.md
 │   ├── master_plan.md
 │   ├── release_workflow.md
@@ -122,6 +123,14 @@ Container runtime variables are dynamically compiled into `window.__HUMID1_CONFI
 | `VITE_CAPTCHA_URL` | `https://cap.humid1.com` | Security service endpoint |
 | `VITE_CHAT_URL` | `https://chat.humid1.com` | Customer messaging service endpoint |
 | `VITE_DEFAULT_DEVICE_NAME` | `HUMID1-CABINET-01` | Default hardware testing identifier |
+
+---
+
+## 📡 API Transaction & JSON Manifest
+
+A full catalog of real request/response payloads, headers, curl examples, and WebSocket formats across ThingsBoard REST, Authentik OIDC PKCE, ESP32 telemetry ingestion, shared attribute sync, device claiming, and 2-way RPC commands is documented in:
+
+👉 **[`docs/api_transaction_manifest.md`](docs/api_transaction_manifest.md)**
 
 ---
 
